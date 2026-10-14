@@ -52,7 +52,15 @@ impl<'a> Tokenizer<'a> {
                         self.state = State::BlockComment;
                         continue;
                     }
-                    if b"*/:=;->(){},#[]".contains(&current) {
+                    if b"*/:=;->(){},#[]+-.".contains(&current) {
+                        if let Some(n) = next {
+                            if (current == b'&' && *n == b'&') || (current == b'|' && *n == b'|') ||
+                                (current == b'<' && (*n == b'<' || *n == b'=')) ||
+                                (current == b'>' && (*n == b'>' || *n == b'=')) {
+                                self.index += 2;
+                                return Some(&self.buffer[self.index-2..self.index]);
+                            }
+                        }
                         self.index += 1;
                         return Some(&self.buffer[self.index-1..self.index]);
                     }

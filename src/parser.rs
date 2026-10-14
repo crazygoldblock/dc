@@ -57,17 +57,21 @@ enum Expression<'a, 'b> {
     Bool(bool),
     Name(&'a str),
     Call{
-        name: &'a str,
+        name: &'b Expression<'a, 'b>,
         parameters: &'b [Expression<'a, 'b>], 
     },
-    Operator{
+    BinaryOperator{
         operator: &'a str,
         left: &'b Expression<'a, 'b>,
         right: &'b Expression<'a, 'b>,
     },
+    UnaryOperator{
+        operator: &'a str,
+        exp: &'b Expression<'a, 'b>,
+    },
     Field{
-        name: &'a str,
-        field: &'b Expression<'a, 'b>,
+        name: &'b Expression<'a, 'b>,
+        field: &'a str,
     },
 }
 #[derive(Clone)]
@@ -151,7 +155,124 @@ fn parse_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Ty
     return Some(Type::Name(first));
 }
 fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Expression<'a, 'b>> {
-    
+    parse_binary_expression(tokens, arena, 0)
+}
+fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, min_precedence: u8) -> Option<Expression<'a, 'b>> {
+    let mut left = parse_primary(tokens, arena)?;
+
+    while let Some(op_token) = tokens.peek() {
+        let precedence = get_operator_precedence(op_token);
+        if precedence < min_precedence {
+            break;
+        }
+        let operator = tokens.next()?;
+        
+        let right = parse_binary_expression(tokens, arena, precedence + 1)?;
+
+        left = Expression::BinaryOperator {
+            operator,
+            left: arena.alloc(left),
+            right: arena.alloc(right),
+        };
+    }
+    Some(left)
+}
+
+fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Expression<'a, 'b>> {
+    let mut token = tokens.next()?;
+
+    let prefix = if "!*&-~".contains(token) {
+        token = tokens.next()?;
+        Some(token)
+    }
+    else { None };
+
+    if let Ok(val) = token.parse::<i64>() {
+        return Some(Expression::Integer(val));
+    }
+
+    if let Ok(val) = token.parse::<f64>() {
+        return Some(Expression::Float(val));
+    }
+
+    if token == "true" {
+        return Some(Expression::Bool(true));
+    }
+    if token == "false" {
+        return Some(Expression::Bool(false));
+    }
+
+    let mut expr = Expression::Name(token);
+
+    loop {
+        if tokens.peek() == Some("(") {
+            tokens.next();
+            let parameters = arena.alloc_array(Expression::Integer(0), 64);
+            let mut parameters_count = 0;
+
+            while tokens.peek().is_some_and(|x| x != ")") {
+                if tokens.peek()? == "," {
+                    tokens.next();
+                }
+
+                let arg = parse_expression(tokens, arena)?;
+                parameters[parameters_count] = arg;
+                parameters_count += 1;
+            }
+
+            if tokens.next()? != ")" { return None; }
+ 
+            expr = Expression::Call {
+                name: arena.alloc(expr),
+                parameters: &parameters[..parameters_count],
+            };
+        } 
+        else if tokens.peek() == Some(".") {
+            tokens.next();
+            let field_name = tokens.next()?;
+
+            expr = Expression::Field {
+                name: arena.alloc(expr),
+                field: field_name,
+            };
+        }
+        else if tokens.peek() == Some("[") {
+            tokens.next();
+
+            let index = parse_expression(tokens, arena)?;
+
+            if tokens.next()? != "]" { return None; }
+
+            expr = Expression::BinaryOperator { 
+                operator: "[", 
+                left: arena.alloc(expr), 
+                right: arena.alloc(index) 
+            };    
+        }
+        else {
+            break;
+        }
+    }
+
+    if let Some(op) = prefix {
+        expr = Expression::UnaryOperator { operator: op, exp: arena.alloc(expr) }
+    }
+    Some(expr)
+}
+fn get_operator_precedence(op: &str) -> u8 {
+    match op {
+        "||" => 1,
+        "&&" => 2,
+        "|" => 3,
+        "^" => 4,
+        "&" => 5,
+        "==" | "!=" => 6,
+        "<" | ">" | "<=" | ">=" => 7,
+        "<<" | ">>" => 8,
+        "+" | "-" => 9,
+        "*" | "/" | "%" => 10,
+        _ => 0,
+    }
 }
 fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Statement<'a, 'b>> {
     return;
