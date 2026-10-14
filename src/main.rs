@@ -1,19 +1,19 @@
-use crate::tokenizer::Tokenizer;
-
+use crate::{arena::Arena, parser::Fragmenter, tokenizer::Tokenizer};
 
 mod tokenizer;
 mod parser;
 mod arena;
 fn main() {
     println!("Hello, world!");
-    let mut t = Tokenizer::new("");
-    t.next();
+    
+    let t = Tokenizer::new("");
+    
+    let mut f = Fragmenter::new(t);
 
-    let mut vec = Vec::new();
-    for i in 0..1000 {
-        vec.push(t.next().unwrap());
-    }
+    let mut arena = Arena::new();
 
+    let f1 = f.next(&arena);
 
-    print!("{}", vec[0]);
+    let f2 = f1;
+    
 }

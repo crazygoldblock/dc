@@ -56,9 +56,17 @@ impl<'a> Tokenizer<'a> {
                         if let Some(n) = next {
                             if (current == b'&' && *n == b'&') || (current == b'|' && *n == b'|') ||
                                 (current == b'<' && (*n == b'<' || *n == b'=')) ||
-                                (current == b'>' && (*n == b'>' || *n == b'=')) {
+                                (current == b'>' && (*n == b'>' || *n == b'=')) || 
+                                (*n == b'=' && b"=!|^&+-*/%".contains(&current)) {
                                 self.index += 2;
                                 return Some(&self.buffer[self.index-2..self.index]);
+                            }
+                            if let Some(n2) = self.buffer.as_bytes().get(self.index+2) {
+                                if (current == b'<' && *n == b'<' && *n2 == b'=') ||
+                                    (current == b'>' && *n == b'>' && *n2 == b'=') {
+                                    self.index += 3;
+                                    return Some(&self.buffer[self.index-3..self.index]);
+                                }
                             }
                         }
                         self.index += 1;
@@ -98,5 +106,12 @@ impl<'a> Tokenizer<'a> {
                 return Some(&self.buffer[start..self.index]);
             },
         }
+    }
+    pub fn until_semicolon(&mut self) -> Option<&'a str> {
+        let index = self.index;
+
+        while self.next()? != ";" {}
+
+        Some(&self.buffer[index..self.index])
     }
 }

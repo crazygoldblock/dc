@@ -26,4 +26,7 @@ impl Arena {
     pub fn clear(&mut self) {
 
     }
+    pub fn new() -> Arena {
+        Arena {  }
+    }
 }
