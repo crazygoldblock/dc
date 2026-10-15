@@ -2,7 +2,7 @@
 
 use crate::{arena::Arena, tokenizer::Tokenizer};
 
-// union, switch+case+default, do_while, struct/array intialization
+// union, enum, switch+case+default, do_while, string literal
 
 #[derive(Clone)]
 pub enum Expression<'a, 'b> {
@@ -11,7 +11,7 @@ pub enum Expression<'a, 'b> {
     Bool(bool),
     Name(&'a str),
     Call{
-        name: &'b Expression<'a, 'b>,
+        expr: &'b Expression<'a, 'b>,
         parameters: &'b [Expression<'a, 'b>], 
     },
     BinaryOperator{
@@ -21,12 +21,14 @@ pub enum Expression<'a, 'b> {
     },
     UnaryOperator{
         operator: &'a str,
-        exp: &'b Expression<'a, 'b>,
+        expr: &'b Expression<'a, 'b>,
     },
     Field{
-        name: &'b Expression<'a, 'b>,
+        expr: &'b Expression<'a, 'b>,
         field: &'a str,
     },
+    ArrayInit(&'b [Expression<'a, 'b>]),
+    StructInit(&'b [(&'a str, Expression<'a, 'b>)]),
 }
 #[derive(Clone)]
 pub enum Type<'a, 'b> {
@@ -257,29 +259,94 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
 }
 
 fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Expression<'a, 'b>> {
-    let mut token = tokens.next()?;
+    let mut token = tokens.peek()?;
+
+    if token == "[" {
+        tokens.next();
+        let parameters = arena.alloc_array(Expression::Integer(0), 64);
+        let mut parameters_count = 0;
+
+        while tokens.peek()? != "]" {
+
+            if tokens.peek()? == "," { tokens.next(); }
+
+            let expr = parse_expression(tokens, &arena)?;
+
+            parameters[parameters_count] = expr;
+            parameters_count += 1;
+        }
+        if tokens.next()? != "]" { return None; }
+
+        return Some(Expression::ArrayInit(&parameters[..parameters_count]));
+    }
+    if token == "{" {
+        tokens.next();
+        let fields = arena.alloc_array(("", Expression::Integer(0)), 64);
+        let mut fields_count = 0;
+
+        while tokens.peek()? != "}" {
+
+            if tokens.peek()? == "," { tokens.next(); }
+
+            let name = tokens.next()?;
+
+            if tokens.next()? != ":" { return None; }
+
+            let value = parse_expression(tokens, &arena)?;
+
+            fields[fields_count] = (name, value);
+            fields_count += 1;
+        }
+        if tokens.next()? != "}" { return None; }
+
+        return Some(Expression::StructInit(&fields[..fields_count]));
+    }
 
     let prefix = if "!*&-~".contains(token) {
-        token = tokens.next()?;
-        Some(token)
+        let tmp = token;
+        token = tokens.peek()?;
+        Some(tmp)
     }
     else { None };
 
-    if let Ok(val) = token.parse::<i64>() {
-        return Some(Expression::Integer(val));
+    let expr = if let Ok(val) = token.parse::<i64>() {
+        let checkpoint = tokens.checkpoint();
+        tokens.next();
+
+        if tokens.peek()? == "." {
+            tokens.restore(checkpoint);
+
+            if let Ok(valf) = tokens.combine(3)?.parse::<f64>() {
+                Some(Expression::Float(valf))
+            }
+            else {
+                None
+            }
+        }
+        else {
+            Some(Expression::Integer(val))
+        }
+    }
+    else if token == "true" {
+        tokens.next();
+        Some(Expression::Bool(true))
+    }
+    else if token == "false" {
+        tokens.next();
+        Some(Expression::Bool(false))
+    }
+    else {
+        None
+    };
+
+    if let Some(e) = expr {
+        if let Some(op) = prefix {
+            return Some(Expression::UnaryOperator { operator: op, expr: arena.alloc(e) });
+        }
+        return Some(e);
     }
 
-    if let Ok(val) = token.parse::<f64>() {
-        return Some(Expression::Float(val));
-    }
-
-    if token == "true" {
-        return Some(Expression::Bool(true));
-    }
-    if token == "false" {
-        return Some(Expression::Bool(false));
-    }
-
+    tokens.next();
     let mut expr = Expression::Name(token);
 
     loop {
@@ -301,7 +368,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
             if tokens.next()? != ")" { return None; }
  
             expr = Expression::Call {
-                name: arena.alloc(expr),
+                expr: arena.alloc(expr),
                 parameters: &parameters[..parameters_count],
             };
         } 
@@ -310,7 +377,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
             let field_name = tokens.next()?;
 
             expr = Expression::Field {
-                name: arena.alloc(expr),
+                expr: arena.alloc(expr),
                 field: field_name,
             };
         }
@@ -333,7 +400,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
     }
 
     if let Some(op) = prefix {
-        expr = Expression::UnaryOperator { operator: op, exp: arena.alloc(expr) }
+        expr = Expression::UnaryOperator { operator: op, expr: arena.alloc(expr) }
     }
     Some(expr)
 }
@@ -349,6 +416,7 @@ fn get_operator_precedence(op: &str) -> u8 {
         "<<" | ">>" => 8,
         "+" | "-" => 9,
         "*" | "/" | "%" => 10,
+        "as" => 11,
         _ => 0,
     }
 }

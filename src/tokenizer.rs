@@ -6,6 +6,10 @@ pub struct Tokenizer<'a> {
     state: State,
     index: usize,
 }
+pub struct Checkpoint {
+    state: State,
+    index: usize,
+}
 #[derive(Clone)]
 enum State {
     Start,
@@ -113,5 +117,21 @@ impl<'a> Tokenizer<'a> {
         while self.next()? != ";" {}
 
         Some(&self.buffer[index..self.index])
+    }
+    pub fn combine(&mut self, len: usize) -> Option<&'a str> {
+        let index = self.index;
+
+        for _ in 0..len {
+            self.next()?;
+        }
+
+        Some(&self.buffer[index..self.index])
+    }
+    pub fn checkpoint(&self) -> Checkpoint {
+        Checkpoint { state: self.state.clone(), index: self.index }
+    }
+    pub fn restore(&mut self, checkpoint: Checkpoint) {
+        self.state = checkpoint.state;
+        self.index = checkpoint.index;
     }
 }
