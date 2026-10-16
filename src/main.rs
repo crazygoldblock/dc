@@ -3,6 +3,7 @@ use crate::{arena::Arena, parser::Fragmenter, tokenizer::Tokenizer};
 mod tokenizer;
 mod parser;
 mod arena;
+mod low_ir;
 fn main() {
     println!("Hello, world!");
     

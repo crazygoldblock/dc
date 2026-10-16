@@ -2,9 +2,9 @@
 
 use crate::{arena::Arena, tokenizer::Tokenizer};
 
-// union, enum, switch+case+default, do_while, string literal
+// union, enum, switch+case+default, do_while, string literal, pointer cast
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum Expression<'a, 'b> {
     Integer(i64),
     Float(f64),
@@ -15,12 +15,12 @@ pub enum Expression<'a, 'b> {
         parameters: &'b [Expression<'a, 'b>], 
     },
     BinaryOperator{
-        operator: &'a str,
+        operator: ParserBinaryOperator,
         left: &'b Expression<'a, 'b>,
         right: &'b Expression<'a, 'b>,
     },
     UnaryOperator{
-        operator: &'a str,
+        operator: ParserUnaryOperator,
         expr: &'b Expression<'a, 'b>,
     },
     Field{
@@ -30,7 +30,45 @@ pub enum Expression<'a, 'b> {
     ArrayInit(&'b [Expression<'a, 'b>]),
     StructInit(&'b [(&'a str, Expression<'a, 'b>)]),
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
+pub enum ParserBinaryOperator {
+    Add,
+    Sub,
+
+    Mul,
+    Div,
+    Rem,
+
+    And,
+    Xor,
+    Or,
+
+    Shl,
+    Shr,
+
+    Less,
+    LessEq,
+    Greater,
+    GreaterEq,
+    Eq,
+    NotEq,
+
+    LogicalAnd,
+    LogicalOr,
+
+    Index,
+
+    Cast,
+}
+#[derive(Clone, PartialEq)]
+pub enum ParserUnaryOperator {
+    Sub,
+    Address,
+    Not,
+    Invert,
+    Dereference,
+}
+#[derive(Clone, PartialEq)]
 pub enum Type<'a, 'b> {
     Name(&'a str),
     Pointer(&'b Type<'a, 'b>),
@@ -81,11 +119,13 @@ pub struct Constant<'a, 'b> {
     typ: Type<'a, 'b>,
     value: Expression<'a, 'b>,
 }
+#[derive(PartialEq, Clone)]
 pub struct TypeAlias<'a, 'b> {
     public: bool,
     name: &'a str,
     typ: Type<'a, 'b>,
 }
+#[derive(PartialEq, Clone)]
 pub struct Struct<'a, 'b> {
     public: bool,
     name: &'a str,
@@ -227,6 +267,11 @@ fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opt
 }
 fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, min_precedence: u8) -> Option<Expression<'a, 'b>> {
 
+    let prefix = if "!*&-~".contains(tokens.peek()?) {
+        Some(tokens.next()?)
+    }
+    else { None };
+
     let mut left = if tokens.peek() == Some("(") {
         tokens.next();
         parse_binary_expression(tokens, arena, 0)?
@@ -250,14 +295,54 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
         let right = parse_binary_expression(tokens, arena, precedence + 1)?;
 
         left = Expression::BinaryOperator {
-            operator,
+            operator: token_to_binary_operator(operator)?,
             left: arena.alloc(left),
             right: arena.alloc(right),
         };
     }
+    if let Some(p) = prefix {
+        left = Expression::UnaryOperator { operator: token_to_unary_operator(p)?, expr: arena.alloc(left) };
+    }
     Some(left)
 }
+fn token_to_binary_operator(token: &str) -> Option<ParserBinaryOperator> {
+    Some(match token {
+        "+" => ParserBinaryOperator::Add,
+        "-" => ParserBinaryOperator::Sub,
+        "*" => ParserBinaryOperator::Mul,
+        "/" => ParserBinaryOperator::Div,
+        "%" => ParserBinaryOperator::Rem,
 
+        "|" => ParserBinaryOperator::Or,
+        "^" => ParserBinaryOperator::Xor,
+        
+        "&&" => ParserBinaryOperator::LogicalAnd,
+        "||" => ParserBinaryOperator::LogicalOr,
+
+        "==" => ParserBinaryOperator::Eq,
+        "!=" => ParserBinaryOperator::NotEq,
+        "<" => ParserBinaryOperator::Less,
+        "<=" => ParserBinaryOperator::LessEq,
+        ">" => ParserBinaryOperator::Greater,
+        ">=" => ParserBinaryOperator::GreaterEq,
+
+        "<<" => ParserBinaryOperator::Shl,
+        ">>" => ParserBinaryOperator::Shr,
+
+        "as" => ParserBinaryOperator::Cast,
+        _ => return None,
+    })
+}
+fn token_to_unary_operator(token: &str) -> Option<ParserUnaryOperator> {
+    Some(match token {
+        "-" => ParserUnaryOperator::Sub,
+        "*" => ParserUnaryOperator::Dereference,
+        "&" => ParserUnaryOperator::Address,
+        "!" => ParserUnaryOperator::Invert,
+        "~" => ParserUnaryOperator::Not,
+        _ => return None,
+    })
+}
 fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Expression<'a, 'b>> {
     let mut token = tokens.peek()?;
 
@@ -302,14 +387,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
         return Some(Expression::StructInit(&fields[..fields_count]));
     }
 
-    let prefix = if "!*&-~".contains(token) {
-        let tmp = token;
-        token = tokens.peek()?;
-        Some(tmp)
-    }
-    else { None };
-
-    let expr = if let Ok(val) = token.parse::<i64>() {
+    if let Ok(val) = token.parse::<i64>() {
         let checkpoint = tokens.checkpoint();
         tokens.next();
 
@@ -317,33 +395,22 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
             tokens.restore(checkpoint);
 
             if let Ok(valf) = tokens.combine(3)?.parse::<f64>() {
-                Some(Expression::Float(valf))
-            }
-            else {
-                None
+                return Some(Expression::Float(valf));
             }
         }
         else {
-            Some(Expression::Integer(val))
+            return Some(Expression::Integer(val));
         }
     }
-    else if token == "true" {
+    
+    if token == "true" {
         tokens.next();
-        Some(Expression::Bool(true))
+        return Some(Expression::Bool(true));
     }
-    else if token == "false" {
+    
+    if token == "false" {
         tokens.next();
-        Some(Expression::Bool(false))
-    }
-    else {
-        None
-    };
-
-    if let Some(e) = expr {
-        if let Some(op) = prefix {
-            return Some(Expression::UnaryOperator { operator: op, expr: arena.alloc(e) });
-        }
-        return Some(e);
+        return Some(Expression::Bool(false));
     }
 
     tokens.next();
@@ -389,7 +456,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
             if tokens.next()? != "]" { return None; }
 
             expr = Expression::BinaryOperator { 
-                operator: "[", 
+                operator: ParserBinaryOperator::Index, 
                 left: arena.alloc(expr), 
                 right: arena.alloc(index) 
             };    
@@ -397,10 +464,6 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
         else {
             break;
         }
-    }
-
-    if let Some(op) = prefix {
-        expr = Expression::UnaryOperator { operator: op, expr: arena.alloc(expr) }
     }
     Some(expr)
 }
