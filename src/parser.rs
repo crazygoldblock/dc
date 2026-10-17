@@ -2,7 +2,7 @@
 
 use std::ops::DerefMut;
 
-use crate::{arena::Arena, tokenizer::Tokenizer};
+use crate::{arena::Arena, lexer::Tokenizer};
 
 // enum, switch+case+default, string literal, better int/float literals
 

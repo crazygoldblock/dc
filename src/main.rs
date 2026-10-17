@@ -1,9 +1,9 @@
-use crate::{arena::Arena, parser::Fragmenter, tokenizer::Tokenizer};
+use crate::{arena::Arena, parser::Fragmenter, lexer::Tokenizer};
 
-mod tokenizer;
+mod lexer;
 mod parser;
 mod arena;
-mod low_ir;
+mod ir_lowerer;
 fn main() {
     println!("Hello, world!");
     
