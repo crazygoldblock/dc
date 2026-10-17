@@ -18,7 +18,16 @@ impl<'a, 'b> CompilationUnit<'a, 'b> {
         vec![Instruction::Immediate{destination: 3, value: 1}]
     }
 }
-
+pub struct IRfunction<'a, 'b> {
+    name: &'a str,
+    paramaters: &'b [RegisterType<'a, 'b>],
+    return_type: RegisterType<'a, 'b>,
+    blocks: &'b [Block<'a, 'b>],
+}
+pub struct Block<'a, 'b> {
+    label: &'a str,
+    instructions: &'b [Instruction<'a, 'b>],
+}
 pub enum Instruction<'a, 'b> {
     Immediate{
         destination: u16,
@@ -40,13 +49,13 @@ pub enum Instruction<'a, 'b> {
     },
     BinaryOperation{
         size: u8,
-        operation: BinaryOperator,
+        operation: IRbinaryOperator,
         destination: u16,
         left: u16,
         right: u16,
     },
     Call{
-        start: &'a str,
+        start: &'a [u8],
         parameters: &'b [u16],
         destination: Option<u16>,
     },
@@ -56,7 +65,7 @@ pub enum Instruction<'a, 'b> {
     },
     Branch{
         condition: u16,
-        start: &'a str,
+        label: &'a str,
     },
     ExtendTruncate{
         typ: ExtTruncType,
@@ -75,6 +84,12 @@ pub enum Instruction<'a, 'b> {
     Move{
         source: u16,
         destination: u16,
+    },
+    LoadGlobal{
+
+    },
+    StoreGlobal{
+
     }
 }
 pub enum ConvertType {
@@ -92,7 +107,7 @@ pub enum ExtTruncType {
     Truncate,
     Ftruncate,
 }
-pub enum BinaryOperator {
+pub enum IRbinaryOperator {
     Add,
     Sub,
 
@@ -134,11 +149,6 @@ pub enum BinaryOperator {
     Fmul,
     Fdiv,
     Frem,
-}
-pub struct IRfunction<'a, 'b> {
-    name: &'a str,
-
-    body: &'b [Instruction<'a, 'b>],
 }
 #[derive(PartialEq, Clone)]
 pub enum VariableType<'a, 'b> {
@@ -224,20 +234,20 @@ impl<'a, 'b> RegisterType<'a, 'b> {
             _=> false,
         }
     }
-    fn from_str(input: &'a str) -> Option<RegisterType<'a, 'b>> {
+    fn from_str(input: &'a [u8]) -> Option<RegisterType<'a, 'b>> {
         Some(match input {
-            "i8" => RegisterType::I8,
-            "i16" => RegisterType::I16,
-            "i32" => RegisterType::I32,
-            "i64" => RegisterType::I64,
-            "u8" => RegisterType::U8,
-            "u16" => RegisterType::U16,
-            "u32" => RegisterType::U32,
-            "u64" => RegisterType::U64,
-            "f32" => RegisterType::F32,
-            "f64" => RegisterType::F64,
-            "u32" => RegisterType::U32,
-            "bool" => RegisterType::Bool,
+            b"i8" => RegisterType::I8,
+            b"i16" => RegisterType::I16,
+            b"i32" => RegisterType::I32,
+            b"i64" => RegisterType::I64,
+            b"u8" => RegisterType::U8,
+            b"u16" => RegisterType::U16,
+            b"u32" => RegisterType::U32,
+            b"u64" => RegisterType::U64,
+            b"f32" => RegisterType::F32,
+            b"f64" => RegisterType::F64,
+            b"u32" => RegisterType::U32,
+            b"bool" => RegisterType::Bool,
             _ => return None,
         })
     }
@@ -247,8 +257,10 @@ fn lower_expression<'a, 'b>(
     arena: &'b Arena, 
     registers: &mut Vec<RegisterType<'a, 'b>>, 
     instructions: &mut Vec<Instruction<'a, 'b>>,
-    variables: &mut HashMap<&'a str, u16>,
-    functions: &HashMap<&'a str, Function<'a, 'b>>,
+    variables: &mut HashMap<&'a [u8], u16>,
+    global_variables: &HashMap<&'a [u8], VariableType>,
+    functions: &HashMap<&'a [u8], Function<'a, 'b>>,
+    global_functions: &HashMap<&'a [u8], Function<'a, 'b>>,
 ) -> Option<u16> {
 
     match expression {
@@ -271,9 +283,9 @@ fn lower_expression<'a, 'b>(
             return Some(*variables.get(n)?);
         },
         Expression::BinaryOperator { operator, left, right } => {
-            let left_reg = lower_expression(left, arena, registers, instructions, variables, functions)?;
+            let left_reg = lower_expression(left, arena, registers, instructions, variables, global_variables, functions, global_functions)?;
 
-            let right_reg = lower_expression(right, arena, registers, instructions, variables, functions)?;
+            let right_reg = lower_expression(left, arena, registers, instructions, variables, global_variables, functions, global_functions)?;
 
             let left_t = registers[left_reg as usize].clone();
             let right_t = registers[right_reg as usize].clone();
@@ -286,8 +298,8 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match left_t.is_float() {
-                        true => BinaryOperator::Fadd,
-                        false => BinaryOperator::Add,
+                        true => IRbinaryOperator::Fadd,
+                        false => IRbinaryOperator::Add,
                     };
                     (op, left_t.clone(), left_t.size())
                 },
@@ -298,8 +310,8 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match left_t.is_float() {
-                        true => BinaryOperator::Fsub,
-                        false => BinaryOperator::Sub,
+                        true => IRbinaryOperator::Fsub,
+                        false => IRbinaryOperator::Sub,
                     };
                     let size = left_t.size();
                     (op, left_t, size)
@@ -310,8 +322,8 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match left_t.is_float() {
-                        true => BinaryOperator::Fmul,
-                        false => BinaryOperator::Mul,
+                        true => IRbinaryOperator::Fmul,
+                        false => IRbinaryOperator::Mul,
                     };
                     let size = left_t.size();
                     (op, left_t, size)
@@ -322,9 +334,9 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match (left_t.is_float(), left_t.is_signed()) {
-                        (true, _) => BinaryOperator::Fdiv,
-                        (false, true) => BinaryOperator::Sdiv,
-                        (false, false) => BinaryOperator::Udiv,
+                        (true, _) => IRbinaryOperator::Fdiv,
+                        (false, true) => IRbinaryOperator::Sdiv,
+                        (false, false) => IRbinaryOperator::Udiv,
                     };
                     let size = left_t.size();
                     (op, left_t, size)
@@ -335,9 +347,9 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match (left_t.is_float(), left_t.is_signed()) {
-                        (true, _) => BinaryOperator::Frem,
-                        (false, true) => BinaryOperator::Srem,
-                        (false, false) => BinaryOperator::Urem,
+                        (true, _) => IRbinaryOperator::Frem,
+                        (false, true) => IRbinaryOperator::Srem,
+                        (false, false) => IRbinaryOperator::Urem,
                     };
                     let size = left_t.size();
                     (op, left_t, size)
@@ -347,21 +359,21 @@ fn lower_expression<'a, 'b>(
                         return None;
                     }
                     let size = left_t.size();
-                    (BinaryOperator::And, left_t, size)
+                    (IRbinaryOperator::And, left_t, size)
                 },
                 ParserBinaryOperator::Xor => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) || left_t.is_float() {
                         return None;
                     }
                     let size = left_t.size();
-                    (BinaryOperator::Xor, left_t, size)
+                    (IRbinaryOperator::Xor, left_t, size)
                 },
                 ParserBinaryOperator::Or => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) || left_t.is_float() {
                         return None;
                     }
                     let size = left_t.size();
-                    (BinaryOperator::Or, left_t, size)
+                    (IRbinaryOperator::Or, left_t, size)
                 },
                 ParserBinaryOperator::Shl => {
                     // TODO: out of bounds shift
@@ -369,7 +381,7 @@ fn lower_expression<'a, 'b>(
                         return None;
                     }
                     let size = left_t.size();
-                    (BinaryOperator::Shl, left_t, size)
+                    (IRbinaryOperator::Shl, left_t, size)
                 },
                 ParserBinaryOperator::Shr => {
                     // TODO: out of bounds shift
@@ -378,8 +390,8 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match left_t.is_signed() {
-                        true => BinaryOperator::ShrSignFill,
-                        false => BinaryOperator::ShrZeroFill,
+                        true => IRbinaryOperator::ShrSignFill,
+                        false => IRbinaryOperator::ShrZeroFill,
                     };
                     let size = left_t.size();
                     (op, left_t, size)
@@ -389,14 +401,14 @@ fn lower_expression<'a, 'b>(
                         return None;
                     }
                     let size = left_t.size();
-                    (BinaryOperator::And, left_t, size)
+                    (IRbinaryOperator::And, left_t, size)
                 },
                 ParserBinaryOperator::LogicalOr => {
                     if left_t != RegisterType::Bool || right_t != RegisterType::Bool {
                         return None;
                     }
                     let size = left_t.size();
-                    (BinaryOperator::Or, left_t, size)
+                    (IRbinaryOperator::Or, left_t, size)
                 },
                 ParserBinaryOperator::Less => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
@@ -404,9 +416,9 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match (left_t.is_float(), left_t.is_signed()) {
-                        (true, _) => BinaryOperator::Fless,
-                        (false, true) => BinaryOperator::Sless,
-                        (false, false) => BinaryOperator::Uless,
+                        (true, _) => IRbinaryOperator::Fless,
+                        (false, true) => IRbinaryOperator::Sless,
+                        (false, false) => IRbinaryOperator::Uless,
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
@@ -416,9 +428,9 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match (left_t.is_float(), left_t.is_signed()) {
-                        (true, _) => BinaryOperator::FlessEq,
-                        (false, true) => BinaryOperator::SlessEq,
-                        (false, false) => BinaryOperator::UlessEq,
+                        (true, _) => IRbinaryOperator::FlessEq,
+                        (false, true) => IRbinaryOperator::SlessEq,
+                        (false, false) => IRbinaryOperator::UlessEq,
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
@@ -428,9 +440,9 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match (left_t.is_float(), left_t.is_signed()) {
-                        (true, _) => BinaryOperator::Fgreater,
-                        (false, true) => BinaryOperator::Sgreater,
-                        (false, false) => BinaryOperator::Ugreater,
+                        (true, _) => IRbinaryOperator::Fgreater,
+                        (false, true) => IRbinaryOperator::Sgreater,
+                        (false, false) => IRbinaryOperator::Ugreater,
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
@@ -440,9 +452,9 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match (left_t.is_float(), left_t.is_signed()) {
-                        (true, _) => BinaryOperator::FgreaterEq,
-                        (false, true) => BinaryOperator::SgreaterEq,
-                        (false, false) => BinaryOperator::UgreaterEq,
+                        (true, _) => IRbinaryOperator::FgreaterEq,
+                        (false, true) => IRbinaryOperator::SgreaterEq,
+                        (false, false) => IRbinaryOperator::UgreaterEq,
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
@@ -452,8 +464,8 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match left_t.is_float() {
-                        true => BinaryOperator::Feq,
-                        false => BinaryOperator::Eq,
+                        true => IRbinaryOperator::Feq,
+                        false => IRbinaryOperator::Eq,
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
@@ -463,8 +475,8 @@ fn lower_expression<'a, 'b>(
                     }
 
                     let op = match left_t.is_float() {
-                        true => BinaryOperator::FnotEq,
-                        false => BinaryOperator::FnotEq,
+                        true => IRbinaryOperator::FnotEq,
+                        false => IRbinaryOperator::FnotEq,
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
@@ -483,7 +495,7 @@ fn lower_expression<'a, 'b>(
             return Some(registers.len() as u16 - 1);
         },
         Expression::UnaryOperator { operator, expr } => {
-            let reg = lower_expression(expr, arena, registers, instructions, variables, functions)?;
+            let reg = lower_expression(expr, arena, registers, instructions, variables, global_variables, functions, global_functions)?;
 
             let t = registers[reg as usize].clone();
 
@@ -497,7 +509,7 @@ fn lower_expression<'a, 'b>(
                     instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: 0 });
                     instructions.push(Instruction::BinaryOperation { 
                         size: size, 
-                        operation: BinaryOperator::Sub, 
+                        operation: IRbinaryOperator::Sub, 
                         destination: registers.len() as u16 - 1, 
                         left: registers.len() as u16 - 1 , 
                         right: reg,
@@ -512,7 +524,7 @@ fn lower_expression<'a, 'b>(
                     instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: 1i64.wrapping_shl(size as u32)-1 });
                     instructions.push(Instruction::BinaryOperation { 
                         size: size, 
-                        operation: BinaryOperator::Xor, 
+                        operation: IRbinaryOperator::Xor, 
                         destination: registers.len() as u16 - 1, 
                         left: reg, 
                         right: registers.len() as u16 - 1,
@@ -527,7 +539,7 @@ fn lower_expression<'a, 'b>(
                     instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: 1 });
                     instructions.push(Instruction::BinaryOperation { 
                         size: size, 
-                        operation: BinaryOperator::Xor, 
+                        operation: IRbinaryOperator::Xor, 
                         destination: registers.len() as u16 - 1, 
                         left: reg, 
                         right: registers.len() as u16 - 1,
@@ -541,7 +553,7 @@ fn lower_expression<'a, 'b>(
         Expression::Cast { expr, typ } => {
             // TODO: pointer casts
 
-            let left_reg = lower_expression(expr, arena, registers, instructions, variables, functions)?;
+            let left_reg = lower_expression(expr, arena, registers, instructions, variables, global_variables, functions, global_functions)?;
             let left_t = registers[left_reg as usize].clone();
 
             let cast_type = if let Type::Name(n) = typ {
@@ -595,7 +607,7 @@ fn lower_expression<'a, 'b>(
 
                 instructions.push(Instruction::BinaryOperation { 
                     size: left_t.size(), 
-                    operation: BinaryOperator::FnotEq, 
+                    operation: IRbinaryOperator::FnotEq, 
                     destination: registers.len() as u16 - 1, 
                     left: left_reg, 
                     right: registers.len() as u16 - 2 
@@ -644,7 +656,7 @@ fn lower_expression<'a, 'b>(
             let register_paratemers = arena.alloc_array(0u16, f.parameters.len());
 
             for (i, par) in f.parameters.iter().enumerate() {
-                let register = lower_expression(&parameters[i], arena, registers, instructions, variables, functions)?;
+                let register = lower_expression(&parameters[i], arena, registers, instructions, variables, global_variables, functions, global_functions)?;
 
                 let sign_type = registers[register as usize].clone();
 
@@ -683,4 +695,23 @@ fn lower_expression<'a, 'b>(
     }
 
     return None;
+}
+fn lower_statement<'a, 'b>(
+    statement: &Statement<'a, 'b>,
+    arena: &'b Arena,
+
+) {
+
+    match statement {
+        Statement::Assignment { destination, value } => todo!(),
+        Statement::Return { value } => todo!(),
+        Statement::If { condition, body, else_body } => todo!(),
+        Statement::While { condition, body } => todo!(),
+        Statement::Break => todo!(),
+        Statement::Continue => todo!(),
+        Statement::Declaration { typ, name, value } => todo!(),
+        Statement::For { declaration, condition, iteration, body } => todo!(),
+        Statement::DoWhile { body, condition } => todo!(),
+    }
+
 }

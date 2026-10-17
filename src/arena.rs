@@ -63,7 +63,6 @@ impl<'a, T> VecArena<'a, T> {
             *self.buffer.add(self.len) = element;
             self.len += 1;
         }
-        
     }
     pub fn array(&self) -> &'a [T] {
         unsafe {

@@ -7,7 +7,7 @@ mod ir_lowerer;
 fn main() {
     println!("Hello, world!");
     
-    let t = Tokenizer::new("");
+    let t = Tokenizer::new(b"");
     
     let mut f = Fragmenter::new(t);
 

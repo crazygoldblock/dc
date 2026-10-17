@@ -11,7 +11,7 @@ pub enum Expression<'a, 'b> {
     Integer(i64),
     Float(f64),
     Bool(bool),
-    Name(&'a str),
+    Name(&'a [u8]),
     Call{
         expr: &'b Expression<'a, 'b>,
         parameters: &'b [Expression<'a, 'b>], 
@@ -27,10 +27,10 @@ pub enum Expression<'a, 'b> {
     },
     Field{
         expr: &'b Expression<'a, 'b>,
-        field: &'a str,
+        field: &'a [u8],
     },
     ArrayInit(&'b [Expression<'a, 'b>]),
-    StructInit(&'b [(&'a str, Expression<'a, 'b>)]),
+    StructInit(&'b [(&'a [u8], Expression<'a, 'b>)]),
     Cast{
         expr: &'b Expression<'a, 'b>,
         typ: &'b Type<'a, 'b>,
@@ -74,14 +74,14 @@ pub enum ParserUnaryOperator {
 }
 #[derive(Clone, PartialEq)]
 pub enum Type<'a, 'b> {
-    Name(&'a str),
+    Name(&'a [u8]),
     Pointer(&'b Type<'a, 'b>),
     Array(&'b Type<'a, 'b>, Expression<'a, 'b>),
 }
 #[derive(Clone)]
 pub enum Statement<'a, 'b> {
     Assignment{
-        destination: Option<(Expression<'a, 'b>, &'a str)>,
+        destination: Option<(Expression<'a, 'b>, &'a [u8])>,
         value: Expression<'a, 'b>,
     },
     Return{
@@ -100,7 +100,7 @@ pub enum Statement<'a, 'b> {
     Continue,
     Declaration{
         typ: Option<Type<'a, 'b>>,
-        name: &'a str,
+        name: &'a [u8],
         value: Option<Expression<'a, 'b>>,
     },
     For{
@@ -117,40 +117,40 @@ pub enum Statement<'a, 'b> {
 pub struct Function<'a, 'b> {
     pub public: bool,
     pub return_type: Option<Type<'a, 'b>>,
-    pub name: &'a str,
-    pub parameters: &'b [(Type<'a, 'b>, &'a str)],
+    pub name: &'a [u8],
+    pub parameters: &'b [(Type<'a, 'b>, &'a [u8])],
     pub body: &'b [Statement<'a, 'b>],
 }
 pub struct Constant<'a, 'b> {
     public: bool,
-    name: &'a str,
+    name: &'a [u8],
     typ: Type<'a, 'b>,
     value: Expression<'a, 'b>,
 }
 #[derive(PartialEq, Clone)]
 pub struct TypeAlias<'a, 'b> {
     public: bool,
-    name: &'a str,
+    name: &'a [u8],
     typ: Type<'a, 'b>,
 }
 #[derive(PartialEq, Clone)]
 pub struct Struct<'a, 'b> {
     public: bool,
-    name: &'a str,
-    fields: &'b [(Type<'a, 'b>, &'a str)],
+    name: &'a [u8],
+    fields: &'b [(Type<'a, 'b>, &'a [u8])],
 }
 #[derive(PartialEq, Clone)]
 pub struct Union<'a, 'b> {
     public: bool,
-    name: &'a str,
-    fields: &'b [(Type<'a, 'b>, &'a str)],
+    name: &'a [u8],
+    fields: &'b [(Type<'a, 'b>, &'a [u8])],
 }
 pub struct Include<'a> {
-    path: &'a str,
+    path: &'a [u8],
 }
 pub struct GlobalVariable<'a, 'b> {
     public: bool,
-    name: &'a str,
+    name: &'a [u8],
     typ: Type<'a, 'b>,
     value: Expression<'a, 'b>,
 }
@@ -220,14 +220,14 @@ fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public
 
     if tokens.next()? != ";" { return None; }
 
-    return Some(GlobalVariable { public, name, typ: t, value });
+    return Some(GlobalVariable { public, name: name.as_bytes(), typ: t, value });
 }
 fn parse_include<'a>(tokens: &mut Tokenizer<'a>) -> Option<Include<'a>> {
     if tokens.next()? != "include" { return None; }
     
     let path = tokens.until_semicolon()?;
 
-    Some(Include{ path })
+    Some(Include{ path: path.as_bytes() })
 }
 fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Function<'a, 'b>> {
     let return_type = if tokens.peek()? == "void" {
@@ -248,7 +248,7 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
         if tokens.peek()? == "," { tokens.next(); }
 
         let t = parse_type(tokens, &arena)?;
-        let name = tokens.next()?;
+        let name = tokens.next()?.as_bytes();
 
         parameters.push((t, name));
     }
@@ -260,7 +260,7 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
     return Some(Function{ 
         public,
         return_type, 
-        name, 
+        name: name.as_bytes(), 
         parameters: parameters.array(), 
         body
     });
@@ -281,7 +281,7 @@ fn parse_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Ty
 
         return Some(Type::Array(t, len));
     }
-    return Some(Type::Name(first));
+    return Some(Type::Name(first.as_bytes()));
 }
 fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Expression<'a, 'b>> {
     let e = parse_binary_expression(tokens, arena, 0, 0)?;
@@ -292,16 +292,16 @@ fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opt
 }
 fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, min_precedence: u8, bracket_depth: usize) -> Option<(Expression<'a, 'b>, usize)> {
 
-    if "!*&-~".contains(tokens.peek()?) {
+    if b"!*&-~".contains(&tokens.peek()?.as_bytes()[0]) { 
         let prefix = tokens.next()?;
         let e = parse_binary_expression(tokens, arena, min_precedence, bracket_depth)?;
         if e.1 != bracket_depth {
             return None;
         }
-        return Some((Expression::UnaryOperator { operator: token_to_unary_operator(tokens.next()?)?, expr: arena.alloc(e.0) }, bracket_depth));
+        return Some((Expression::UnaryOperator { operator: token_to_unary_operator(tokens.next()?.as_bytes())?, expr: arena.alloc(e.0) }, bracket_depth));
     }
 
-    let mut left = if tokens.peek() == Some("(") {
+    let mut left = if tokens.peek()? == "(" {
         tokens.next();
         let e = parse_binary_expression(tokens, arena, 0, bracket_depth + 1)?;
         if e.1 != bracket_depth {
@@ -313,7 +313,7 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
         parse_primary(tokens, arena)?
     };
 
-    if tokens.peek() == Some(")") {
+    if tokens.peek()? == ")" {
         if bracket_depth == 0 {
             return None;
         }
@@ -322,7 +322,7 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
     }
 
     while let Some(op_token) = tokens.peek() {
-        let precedence = get_operator_precedence(op_token);
+        let precedence = get_operator_precedence(op_token.as_bytes());
         if precedence < min_precedence {
             break;
         }
@@ -341,7 +341,7 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
             } 
 
             left = Expression::BinaryOperator {
-                operator: token_to_binary_operator(operator)?,
+                operator: token_to_binary_operator(operator.as_bytes())?,
                 left: arena.alloc(left),
                 right: arena.alloc(e.0),
             };
@@ -349,39 +349,39 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
     }
     Some((left, bracket_depth))
 }
-fn token_to_binary_operator(token: &str) -> Option<ParserBinaryOperator> {
+fn token_to_binary_operator(token: &[u8]) -> Option<ParserBinaryOperator> {
     Some(match token {
-        "+" => ParserBinaryOperator::Add,
-        "-" => ParserBinaryOperator::Sub,
-        "*" => ParserBinaryOperator::Mul,
-        "/" => ParserBinaryOperator::Div,
-        "%" => ParserBinaryOperator::Rem,
+        b"+" => ParserBinaryOperator::Add,
+        b"-" => ParserBinaryOperator::Sub,
+        b"*" => ParserBinaryOperator::Mul,
+        b"/" => ParserBinaryOperator::Div,
+        b"%" => ParserBinaryOperator::Rem,
 
-        "|" => ParserBinaryOperator::Or,
-        "^" => ParserBinaryOperator::Xor,
+        b"|" => ParserBinaryOperator::Or,
+        b"^" => ParserBinaryOperator::Xor,
         
-        "&&" => ParserBinaryOperator::LogicalAnd,
-        "||" => ParserBinaryOperator::LogicalOr,
+        b"&&" => ParserBinaryOperator::LogicalAnd,
+        b"||" => ParserBinaryOperator::LogicalOr,
 
-        "==" => ParserBinaryOperator::Eq,
-        "!=" => ParserBinaryOperator::NotEq,
-        "<" => ParserBinaryOperator::Less,
-        "<=" => ParserBinaryOperator::LessEq,
-        ">" => ParserBinaryOperator::Greater,
-        ">=" => ParserBinaryOperator::GreaterEq,
+        b"==" => ParserBinaryOperator::Eq,
+        b"!=" => ParserBinaryOperator::NotEq,
+        b"<" => ParserBinaryOperator::Less,
+        b"<=" => ParserBinaryOperator::LessEq,
+        b">" => ParserBinaryOperator::Greater,
+        b">=" => ParserBinaryOperator::GreaterEq,
 
-        "<<" => ParserBinaryOperator::Shl,
-        ">>" => ParserBinaryOperator::Shr,
+        b"<<" => ParserBinaryOperator::Shl,
+        b">>" => ParserBinaryOperator::Shr,
         _ => return None,
     })
 }
-fn token_to_unary_operator(token: &str) -> Option<ParserUnaryOperator> {
+fn token_to_unary_operator(token: &[u8]) -> Option<ParserUnaryOperator> {
     Some(match token {
-        "-" => ParserUnaryOperator::Sub,
-        "*" => ParserUnaryOperator::Dereference,
-        "&" => ParserUnaryOperator::Address,
-        "!" => ParserUnaryOperator::Invert,
-        "~" => ParserUnaryOperator::Not,
+        b"-" => ParserUnaryOperator::Sub,
+        b"*" => ParserUnaryOperator::Dereference,
+        b"&" => ParserUnaryOperator::Address,
+        b"!" => ParserUnaryOperator::Invert,
+        b"~" => ParserUnaryOperator::Not,
         _ => return None,
     })
 }
@@ -419,21 +419,21 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
 
             let value = parse_expression(tokens, &arena)?;
 
-            fields.push((name, value));
+            fields.push((name.as_bytes(), value));
         }
         if tokens.next()? != "}" { return None; }
 
         return Some(Expression::StructInit(fields.array()));
     }
 
-    if let Ok(val) = token.parse::<i64>() {
+    if let Ok(val) = str::from_utf8(token.as_bytes()).unwrap().parse::<i64>() {
         let checkpoint = tokens.checkpoint();
         tokens.next();
 
         if tokens.peek()? == "." {
             tokens.restore(checkpoint);
 
-            if let Ok(valf) = tokens.combine(3)?.parse::<f64>() {
+            if let Ok(valf) = str::from_utf8(tokens.combine(3)?.as_bytes()).unwrap().parse::<f64>() {
                 return Some(Expression::Float(valf));
             }
         }
@@ -453,10 +453,10 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
     }
 
     tokens.next();
-    let mut expr = Expression::Name(token);
+    let mut expr = Expression::Name(token.as_bytes());
 
     loop {
-        if tokens.peek() == Some("(") {
+        if tokens.peek()? == "(" {
             tokens.next();
             let mut parameters = arena.vec_capacity(16);
 
@@ -476,16 +476,16 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
                 parameters: parameters.array(),
             };
         } 
-        else if tokens.peek() == Some(".") {
+        else if tokens.peek()? == "." {
             tokens.next();
             let field_name = tokens.next()?;
 
             expr = Expression::Field {
                 expr: arena.alloc(expr),
-                field: field_name,
+                field: field_name.as_bytes(),
             };
         }
-        else if tokens.peek() == Some("[") {
+        else if tokens.peek()? == "[" {
             tokens.next();
 
             let index = parse_expression(tokens, arena)?;
@@ -504,19 +504,19 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
     }
     Some(expr)
 }
-fn get_operator_precedence(op: &str) -> u8 {
+fn get_operator_precedence(op: &[u8]) -> u8 {
     match op {
-        "||" => 1,
-        "&&" => 2,
-        "|" => 3,
-        "^" => 4,
-        "&" => 5,
-        "==" | "!=" => 6,
-        "<" | ">" | "<=" | ">=" => 7,
-        "<<" | ">>" => 8,
-        "+" | "-" => 9,
-        "*" | "/" | "%" => 10,
-        "as" => 11,
+        b"||" => 1,
+        b"&&" => 2,
+        b"|" => 3,
+        b"^" => 4,
+        b"&" => 5,
+        b"==" | b"!=" => 6,
+        b"<" | b">" | b"<=" | b">=" => 7,
+        b"<<" | b">>" => 8,
+        b"+" | b"-" => 9,
+        b"*" | b"/" | b"%" => 10,
+        b"as" => 11,
         _ => 0,
     }
 }
@@ -607,7 +607,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
 
         if tokens.next()? != ";" { return None; }
 
-        return Some(Statement::Declaration { typ: t, name, value });
+        return Some(Statement::Declaration { typ: t, name: name.as_bytes(), value });
     }
     if tokens.peek()? == "for" {
         tokens.next();
@@ -635,7 +635,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
                 None
             };            
 
-            let tmp: &Statement<'_, '_> = arena.alloc(Statement::Declaration { typ: t, name, value });
+            let tmp: &Statement<'_, '_> = arena.alloc(Statement::Declaration { typ: t, name: name.as_bytes(), value });
             Some(tmp)
         }
         else {
@@ -656,7 +656,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         let iteration = if tokens.peek()? != ")" {
             let first = parse_expression(tokens, arena)?;
 
-            let second = if tokens.peek()?.ends_with("=") {
+            let second = if tokens.peek()?.as_bytes().last()? == &b'=' {
                 let op = tokens.next()?;
                 Some((parse_expression(tokens, arena)?, op))
             }
@@ -665,7 +665,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
             };
 
             if let Some(sec) = second {
-                let tmp: &Statement<'_, '_> = arena.alloc(Statement::Assignment { destination: Some((first, sec.1)), value: sec.0 });
+                let tmp: &Statement<'_, '_> = arena.alloc(Statement::Assignment { destination: Some((first, sec.1.as_bytes())), value: sec.0 });
                 Some(tmp)
             }
             else {
@@ -699,7 +699,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
 
     let first = parse_expression(tokens, arena)?;
 
-    let second = if tokens.peek()?.ends_with("=") {
+    let second = if tokens.peek()?.as_bytes().last()? == &b'=' {
         let op = tokens.next()?;
         Some((parse_expression(tokens, arena)?, op))
     }
@@ -710,7 +710,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
     if tokens.next()? != ";" { return None; }
 
     if let Some(sec) = second {
-        return Some(Statement::Assignment { destination: Some((first, sec.1)), value: sec.0 });
+        return Some(Statement::Assignment { destination: Some((first, sec.1.as_bytes())), value: sec.0 });
     }
     else {
         return Some(Statement::Assignment { destination: None, value: first });
@@ -733,12 +733,12 @@ fn parse_struct<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bo
         let t = parse_type(tokens, arena)?;
         let name = tokens.next()?;
             
-        fields.push((t, name));
+        fields.push((t, name.as_bytes()));
     }
 
     if tokens.next()? != "}" { return None; }
 
-    return Some(Struct { public, name, fields: fields.array() });
+    return Some(Struct { public, name: name.as_bytes(), fields: fields.array() });
 
 }
 fn parse_union<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Union<'a, 'b>> {
@@ -758,12 +758,12 @@ fn parse_union<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: boo
         let t = parse_type(tokens, arena)?;
         let name = tokens.next()?;
         
-        fields.push((t, name));
+        fields.push((t, name.as_bytes()));
     }
 
     if tokens.next()? != "}" { return None; }
 
-    return Some(Union { public, name, fields: fields.array() });
+    return Some(Union { public, name: name.as_bytes(), fields: fields.array() });
 
 }
 fn parse_alias<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<TypeAlias<'a, 'b>> {
@@ -775,7 +775,7 @@ fn parse_alias<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: boo
 
     let t = parse_type(tokens, arena)?;
     
-    return Some(TypeAlias { public, name, typ: t })
+    return Some(TypeAlias { public, name: name.as_bytes(), typ: t })
 }
 fn parse_constant<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Constant<'a, 'b>> {
     if tokens.next()? != "const" { return None; }
@@ -790,5 +790,5 @@ fn parse_constant<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
 
     let value = parse_expression(tokens, arena)?;
     
-    return Some(Constant { public, name, typ: t, value });
+    return Some(Constant { public, name: name.as_bytes(), typ: t, value });
 }
