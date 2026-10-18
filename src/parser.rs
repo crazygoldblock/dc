@@ -81,7 +81,7 @@ pub enum Type<'a, 'b> {
 #[derive(Clone)]
 pub enum Statement<'a, 'b> {
     Assignment{
-        destination: Option<(Expression<'a, 'b>, &'a [u8])>,
+        destination: Option<(Expression<'a, 'b>)>,
         value: Expression<'a, 'b>,
     },
     Return{
@@ -99,7 +99,7 @@ pub enum Statement<'a, 'b> {
     Break,
     Continue,
     Declaration{
-        typ: Option<Type<'a, 'b>>,
+        typ: Type<'a, 'b>,
         name: &'a [u8],
         value: Option<Expression<'a, 'b>>,
     },
@@ -589,13 +589,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         
         let name = tokens.next()?;
 
-        let t = if tokens.peek()? == ":" {
-            tokens.next();
-            Some(parse_type(tokens, arena)?)
-        }
-        else {
-            None
-        };
+        let t = parse_type(tokens, arena)?;
 
         let value = if tokens.peek()? == "=" {
             tokens.next();
@@ -619,13 +613,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
 
             let name = tokens.next()?;
 
-            let t = if tokens.peek()? == ":" {
-                tokens.next();
-                Some(parse_type(tokens, arena)?)
-            }
-            else {
-                None
-            };
+            let t = parse_type(tokens, arena)?;
 
             let value = if tokens.peek()? == "=" {
                 tokens.next();
@@ -664,18 +652,29 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
                 None
             };
 
-            if let Some(sec) = second {
-                let tmp: &Statement<'_, '_> = arena.alloc(Statement::Assignment { destination: Some((first, sec.1.as_bytes())), value: sec.0 });
-                Some(tmp)
+            if let Some((expr, op)) = second {
+                if op == "=" {
+                    Some(Statement::Assignment { destination: Some(first), value: expr })
+                }
+                else {
+                    let operator = token_to_binary_operator(&op.as_bytes()[..op.as_bytes().len()-2])?;
+                    let new_expr = Expression::BinaryOperator { operator, left: arena.alloc(first.clone()), right: arena.alloc(expr) };
+                    Some(Statement::Assignment { destination: Some(first), value: new_expr })
+                }
             }
             else {
-                let tmp: &Statement<'_, '_> = arena.alloc(Statement::Assignment { destination: None, value: first });
-                Some(tmp)
+                Some(Statement::Assignment { destination: None, value: first })
             }
         }
         else {
             None
         };
+
+        let iteration = if let Some(s) = iteration {
+            let a: &Statement<'_, '_> = arena.alloc(s);
+            Some(a)
+        }
+        else { None };
 
         if tokens.next()? != ")" { return None; }
 
@@ -709,8 +708,16 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
 
     if tokens.next()? != ";" { return None; }
 
-    if let Some(sec) = second {
-        return Some(Statement::Assignment { destination: Some((first, sec.1.as_bytes())), value: sec.0 });
+    if let Some((expr, op)) = second {
+
+        if op == "=" {
+            return Some(Statement::Assignment { destination: Some(first), value: expr });
+        }
+        else {
+            let operator = token_to_binary_operator(&op.as_bytes()[..op.as_bytes().len()-2])?;
+            let new_expr = Expression::BinaryOperator { operator, left: arena.alloc(first.clone()), right: arena.alloc(expr) };
+            return Some(Statement::Assignment { destination: Some(first), value: new_expr });
+        }
     }
     else {
         return Some(Statement::Assignment { destination: None, value: first });

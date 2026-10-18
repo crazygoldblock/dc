@@ -52,7 +52,6 @@ pub struct VecArena<'a, T> {
 impl<'a, T> VecArena<'a, T> {
     pub fn push(&mut self, element: T) {
         unsafe {
-
             if self.capacity == self.len {
                 let ptr = alloc(Layout::from_size_align(size_of::<T>() * self.capacity * 2, align_of::<T>()).unwrap()) as *mut T;
                 copy_nonoverlapping(self.buffer, ptr, self.len);

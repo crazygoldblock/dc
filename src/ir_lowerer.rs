@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, ops::{Add, Mul}};
 
-use crate::{arena::Arena, parser::{Expression, Function, Statement, Struct, Type, TypeAlias, Union}};
+use crate::{arena::{Arena, VecArena}, parser::{Expression, Function, Statement, Struct, Type, TypeAlias, Union}};
 use crate::parser::ParserBinaryOperator;
 use crate::parser::ParserUnaryOperator;
 
@@ -25,8 +25,7 @@ pub struct IRfunction<'a, 'b> {
     blocks: &'b [Block<'a, 'b>],
 }
 pub struct Block<'a, 'b> {
-    label: &'a str,
-    instructions: &'b [Instruction<'a, 'b>],
+    instructions: VecArena<'b, Instruction<'a, 'b>>,
 }
 pub enum Instruction<'a, 'b> {
     Immediate{
@@ -60,12 +59,14 @@ pub enum Instruction<'a, 'b> {
         destination: Option<u16>,
     },
     Return{
-        size: u8,
-        value: u16,
+        value: Option<u16>,
     },
     Branch{
         condition: u16,
-        label: &'a str,
+        label: i32,
+    },
+    Jump{
+        label: i32,
     },
     ExtendTruncate{
         typ: ExtTruncType,
@@ -256,11 +257,9 @@ fn lower_expression<'a, 'b>(
     expression: &Expression<'a, 'b>, 
     arena: &'b Arena, 
     registers: &mut Vec<RegisterType<'a, 'b>>, 
-    instructions: &mut Vec<Instruction<'a, 'b>>,
+    instructions: &mut VecArena<'b, Instruction<'a, 'b>>,
     variables: &mut HashMap<&'a [u8], u16>,
-    global_variables: &HashMap<&'a [u8], VariableType>,
     functions: &HashMap<&'a [u8], Function<'a, 'b>>,
-    global_functions: &HashMap<&'a [u8], Function<'a, 'b>>,
 ) -> Option<u16> {
 
     match expression {
@@ -283,9 +282,9 @@ fn lower_expression<'a, 'b>(
             return Some(*variables.get(n)?);
         },
         Expression::BinaryOperator { operator, left, right } => {
-            let left_reg = lower_expression(left, arena, registers, instructions, variables, global_variables, functions, global_functions)?;
+            let left_reg = lower_expression(left, arena, registers, instructions, variables, functions)?;
 
-            let right_reg = lower_expression(left, arena, registers, instructions, variables, global_variables, functions, global_functions)?;
+            let right_reg = lower_expression(left, arena, registers, instructions, variables, functions)?;
 
             let left_t = registers[left_reg as usize].clone();
             let right_t = registers[right_reg as usize].clone();
@@ -495,7 +494,7 @@ fn lower_expression<'a, 'b>(
             return Some(registers.len() as u16 - 1);
         },
         Expression::UnaryOperator { operator, expr } => {
-            let reg = lower_expression(expr, arena, registers, instructions, variables, global_variables, functions, global_functions)?;
+            let reg = lower_expression(expr, arena, registers, instructions, variables, functions)?;
 
             let t = registers[reg as usize].clone();
 
@@ -553,7 +552,7 @@ fn lower_expression<'a, 'b>(
         Expression::Cast { expr, typ } => {
             // TODO: pointer casts
 
-            let left_reg = lower_expression(expr, arena, registers, instructions, variables, global_variables, functions, global_functions)?;
+            let left_reg = lower_expression(expr, arena, registers, instructions, variables, functions)?;
             let left_t = registers[left_reg as usize].clone();
 
             let cast_type = if let Type::Name(n) = typ {
@@ -656,7 +655,7 @@ fn lower_expression<'a, 'b>(
             let register_paratemers = arena.alloc_array(0u16, f.parameters.len());
 
             for (i, par) in f.parameters.iter().enumerate() {
-                let register = lower_expression(&parameters[i], arena, registers, instructions, variables, global_variables, functions, global_functions)?;
+                let register = lower_expression(&parameters[i], arena, registers, instructions, variables, functions)?;
 
                 let sign_type = registers[register as usize].clone();
 
@@ -699,19 +698,171 @@ fn lower_expression<'a, 'b>(
 fn lower_statement<'a, 'b>(
     statement: &Statement<'a, 'b>,
     arena: &'b Arena,
-
-) {
+    registers: &mut Vec<RegisterType<'a, 'b>>, 
+    blocks: &mut Vec<Block<'a, 'b>>,
+    variables: &mut HashMap<&'a [u8], u16>,
+    functions: &HashMap<&'a [u8], Function<'a, 'b>>,
+    return_type: Option<RegisterType<'a, 'b>>,
+) -> Option<()> {
 
     match statement {
-        Statement::Assignment { destination, value } => todo!(),
-        Statement::Return { value } => todo!(),
-        Statement::If { condition, body, else_body } => todo!(),
-        Statement::While { condition, body } => todo!(),
+        Statement::Assignment { destination, value } => {
+            let instructions = &mut blocks.last_mut()?.instructions;
+            let value_reg = lower_expression(value, arena, registers, instructions, variables, functions)?;
+
+            if let Some(d) = destination {
+                if let Expression::Name(n) = d {
+                    let dest_reg = variables.get(n)?;
+
+                    if registers[*dest_reg as usize] != registers[value_reg as usize] {
+                        return None;
+                    }
+
+                    instructions.push(Instruction::Move { source: value_reg, destination: *dest_reg });
+                }
+                else { return None; }
+            }
+        },
+        Statement::Return { value } => {
+            let instructions = &mut blocks.last_mut()?.instructions;
+            let value_reg = if let Some(v) = value {
+                let value_reg = lower_expression(v, arena, registers, instructions, variables, functions)?;
+                if return_type.is_none() || return_type.unwrap() != registers[value_reg as usize] {
+                    return None;
+                }
+                Some(value_reg)
+            }
+            else {
+                if return_type.is_some() {
+                    return None;
+                } 
+                None 
+            };
+
+            instructions.push(Instruction::Return { value: value_reg });
+        },
+        Statement::If { condition, body, else_body } => {
+            let instructions = &mut blocks.last_mut()?.instructions;
+            let c = lower_expression(condition, arena, registers, instructions, variables, functions)?;
+            
+            if registers[c as usize] != RegisterType::Bool {
+                return None;
+            }
+
+            registers.push(RegisterType::Bool);
+            instructions.push(Instruction::Immediate { destination: registers.len() as u16 -1, value: 1 });
+            instructions.push(Instruction::BinaryOperation { 
+                size: 1, 
+                operation: IRbinaryOperator::Xor, 
+                destination: registers.len() as u16 -1, 
+                left: registers.len() as u16 -1, 
+                right: c, 
+            });
+
+            let condition_reg= registers.len() as u16 -1;
+            let condition_index = blocks.len()-1;
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+
+            for s in *body {
+                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone())?;
+            }
+
+            let next_index = blocks.len();
+
+            blocks[condition_index].instructions.push(Instruction::Branch { 
+                condition: condition_reg, 
+                label: next_index as i32, 
+            });
+
+            if let Some(e) = else_body {
+                let jump_index = blocks.len()-1;
+                
+                blocks.push(Block { instructions: arena.vec_capacity(16) });
+
+                for s in *e {
+                    lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone())?;
+                }
+
+                let next_index = blocks.len();
+
+                blocks[jump_index].instructions.push(Instruction::Jump {  
+                    label: next_index as i32, 
+                });
+            }
+
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+        },
+        Statement::While { condition, body } => {
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+            let condition_block_index = blocks.len()-1;
+
+            let instructions = &mut blocks.last_mut()?.instructions;
+            let c = lower_expression(condition, arena, registers, instructions, variables, functions)?;
+
+            if registers[c as usize] != RegisterType::Bool {
+                return None;
+            }
+
+            registers.push(RegisterType::Bool);
+            instructions.push(Instruction::Immediate { destination: registers.len() as u16 -1, value: 1 });
+            instructions.push(Instruction::BinaryOperation { 
+                size: 1, 
+                operation: IRbinaryOperator::Xor, 
+                destination: registers.len() as u16 -1, 
+                left: registers.len() as u16 -1, 
+                right: c, 
+            });
+
+            let condition_reg= registers.len() as u16 -1;
+
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+
+            for s in *body {
+                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone())?;
+            }
+
+            blocks.last_mut().unwrap().instructions.push(Instruction::Jump { 
+                label: condition_block_index as i32, 
+            });
+
+            let next_block_index = blocks.len();
+
+            blocks[condition_block_index].instructions.push(Instruction::Branch { 
+                condition: condition_reg, 
+                label: next_block_index as i32, 
+            });
+
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+        },
         Statement::Break => todo!(),
         Statement::Continue => todo!(),
-        Statement::Declaration { typ, name, value } => todo!(),
+        Statement::Declaration { typ, name, value } => {
+            let instructions = &mut blocks.last_mut()?.instructions;
+            let value_reg = if let Some(v) = value {
+                lower_expression(v, arena, registers, instructions, variables, functions)?
+            } 
+            else { u16::MAX };
+
+            let var_type = if let Type::Name(n) = typ {
+                n
+            }
+            else { return None; };
+
+            let reg_t = RegisterType::from_str(*var_type)?;
+
+            if value_reg == u16::MAX {
+                registers.push(reg_t);
+            }
+            else {
+                if registers[value_reg as usize] != reg_t {
+                    return None;
+                }
+            }
+
+            variables.insert(name, registers.len() as u16 -1);
+        },
         Statement::For { declaration, condition, iteration, body } => todo!(),
         Statement::DoWhile { body, condition } => todo!(),
     }
-
+    Some(())
 }
