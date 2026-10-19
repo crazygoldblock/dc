@@ -68,4 +68,27 @@ impl<'a, T> VecArena<'a, T> {
             from_raw_parts(self.buffer, self.len)
         }
     }
+    pub fn last_mut(&mut self) -> Option<&mut T> {
+        if self.len == 0 {
+            None
+        }
+        else {
+            unsafe {
+                Some(&mut *self.buffer.add(self.len-1))
+            }   
+        }
+    }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        if index >= self.len {
+            None
+        }
+        else {
+            unsafe {
+                Some(&mut *self.buffer.add(index))
+            }
+        }
+    }
 }

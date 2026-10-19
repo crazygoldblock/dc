@@ -1,10 +1,9 @@
 #![allow(unused)]
 
-use std::{collections::HashMap, ops::{Add, Mul}};
+use std::collections::HashMap;
 
-use crate::{arena::{Arena, VecArena}, parser::{Expression, Function, Statement, Struct, Type, TypeAlias, Union}};
-use crate::parser::ParserBinaryOperator;
-use crate::parser::ParserUnaryOperator;
+use crate::{arena::{Arena, VecArena}};
+use crate::parser::{Expression, Function, Statement, Struct, Type, TypeAlias, Union, ASTbinaryOperator, ASTunaryOperator};
 
 pub struct CompilationUnit<'a, 'b> {
     types: HashMap<&'a str, Type<'a, 'b>>,
@@ -19,9 +18,9 @@ impl<'a, 'b> CompilationUnit<'a, 'b> {
     }
 }
 pub struct IRfunction<'a, 'b> {
-    name: &'a str,
+    name: &'a [u8],
     paramaters: &'b [RegisterType<'a, 'b>],
-    return_type: RegisterType<'a, 'b>,
+    return_type: Option<RegisterType<'a, 'b>>,
     blocks: &'b [Block<'a, 'b>],
 }
 pub struct Block<'a, 'b> {
@@ -161,15 +160,39 @@ pub enum VariableType<'a, 'b> {
 fn lower_function<'a, 'b>(
     arena: &'b Arena, 
     function: &Function<'a, 'b>, 
-    global_vars: &HashMap<&'a str, Type<'a, 'b>>, 
-    types: &HashMap<&'a str, VariableType<'a, 'b>>
+    functions: &HashMap<&'a [u8], Function<'a, 'b>>,
 ) -> Option<IRfunction<'a, 'b>> {
-    //let mut registers = HashMap::new();
+    let mut registers = Vec::new();
+    let mut blocks = arena.vec_capacity(8);
+    let mut variables = Vec::new();
 
-    let a: Statement;
+    let parameters = arena.alloc_array(RegisterType::Bool, function.parameters.len());
 
+    for (i, p) in function.parameters.iter().enumerate() {
+        let reg_type = RegisterType::from_str(p.1)?;
+        parameters[i] = reg_type.clone();
+        registers.push(reg_type);
+        variables.push((p.1, i as u16));
+    }
 
-    return None;
+    let return_type = if let Some(ret_t) = function.return_type.clone() {
+        if let Type::Name(n) = ret_t {
+            Some(RegisterType::from_str(n)?) 
+        }
+        else { None }
+    }
+    else { None };
+
+    for s in function.body {
+        lower_statement(s, arena, &mut registers, &mut blocks, &mut variables, functions, return_type.clone(), None)?;
+    }
+
+    return Some(IRfunction {
+        name: function.name,
+        paramaters: parameters,
+        return_type: return_type,
+        blocks: blocks.array(),
+    });
 }
 #[derive(PartialEq, Clone)]
 enum RegisterType<'a, 'b> {
@@ -258,7 +281,7 @@ fn lower_expression<'a, 'b>(
     arena: &'b Arena, 
     registers: &mut Vec<RegisterType<'a, 'b>>, 
     instructions: &mut VecArena<'b, Instruction<'a, 'b>>,
-    variables: &mut HashMap<&'a [u8], u16>,
+    variables: &mut Vec<(&'a [u8], u16)>,
     functions: &HashMap<&'a [u8], Function<'a, 'b>>,
 ) -> Option<u16> {
 
@@ -279,7 +302,8 @@ fn lower_expression<'a, 'b>(
             return Some(registers.len() as u16 - 1);
         },
         Expression::Name(n) => {
-            return Some(*variables.get(n)?);
+            let pos = variables.iter().find(|x| &x.0 == n)?;
+            return Some(pos.1);
         },
         Expression::BinaryOperator { operator, left, right } => {
             let left_reg = lower_expression(left, arena, registers, instructions, variables, functions)?;
@@ -290,7 +314,7 @@ fn lower_expression<'a, 'b>(
             let right_t = registers[right_reg as usize].clone();
 
             let op = match operator {
-                ParserBinaryOperator::Add => {
+                ASTbinaryOperator::Add => {
                     // TODO: pointer = Add(pointer, int)
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
                         return None;
@@ -302,7 +326,7 @@ fn lower_expression<'a, 'b>(
                     };
                     (op, left_t.clone(), left_t.size())
                 },
-                ParserBinaryOperator::Sub => {
+                ASTbinaryOperator::Sub => {
                     // TODO: pointer = Sub(pointer, int)
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
                         return None;
@@ -315,7 +339,7 @@ fn lower_expression<'a, 'b>(
                     let size = left_t.size();
                     (op, left_t, size)
                 },
-                ParserBinaryOperator::Mul => {
+                ASTbinaryOperator::Mul => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
                         return None;
                     }
@@ -327,7 +351,7 @@ fn lower_expression<'a, 'b>(
                     let size = left_t.size();
                     (op, left_t, size)
                 },
-                ParserBinaryOperator::Div => {
+                ASTbinaryOperator::Div => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
                         return None;
                     }
@@ -340,7 +364,7 @@ fn lower_expression<'a, 'b>(
                     let size = left_t.size();
                     (op, left_t, size)
                 },
-                ParserBinaryOperator::Rem => {
+                ASTbinaryOperator::Rem => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
                         return None;
                     }
@@ -353,28 +377,28 @@ fn lower_expression<'a, 'b>(
                     let size = left_t.size();
                     (op, left_t, size)
                 },
-                ParserBinaryOperator::And => {
+                ASTbinaryOperator::And => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) || left_t.is_float() {
                         return None;
                     }
                     let size = left_t.size();
                     (IRbinaryOperator::And, left_t, size)
                 },
-                ParserBinaryOperator::Xor => {
+                ASTbinaryOperator::Xor => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) || left_t.is_float() {
                         return None;
                     }
                     let size = left_t.size();
                     (IRbinaryOperator::Xor, left_t, size)
                 },
-                ParserBinaryOperator::Or => {
+                ASTbinaryOperator::Or => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) || left_t.is_float() {
                         return None;
                     }
                     let size = left_t.size();
                     (IRbinaryOperator::Or, left_t, size)
                 },
-                ParserBinaryOperator::Shl => {
+                ASTbinaryOperator::Shl => {
                     // TODO: out of bounds shift
                     if (!right_t.is_signed() && !right_t.is_unsigned()) || (!left_t.is_signed() && !left_t.is_unsigned()) {
                         return None;
@@ -382,7 +406,7 @@ fn lower_expression<'a, 'b>(
                     let size = left_t.size();
                     (IRbinaryOperator::Shl, left_t, size)
                 },
-                ParserBinaryOperator::Shr => {
+                ASTbinaryOperator::Shr => {
                     // TODO: out of bounds shift
                     if (!right_t.is_signed() && !right_t.is_unsigned()) || (!left_t.is_signed() && !left_t.is_unsigned()) {
                         return None;
@@ -395,21 +419,21 @@ fn lower_expression<'a, 'b>(
                     let size = left_t.size();
                     (op, left_t, size)
                 },
-                ParserBinaryOperator::LogicalAnd => {
+                ASTbinaryOperator::LogicalAnd => {
                     if left_t != RegisterType::Bool || right_t != RegisterType::Bool {
                         return None;
                     }
                     let size = left_t.size();
                     (IRbinaryOperator::And, left_t, size)
                 },
-                ParserBinaryOperator::LogicalOr => {
+                ASTbinaryOperator::LogicalOr => {
                     if left_t != RegisterType::Bool || right_t != RegisterType::Bool {
                         return None;
                     }
                     let size = left_t.size();
                     (IRbinaryOperator::Or, left_t, size)
                 },
-                ParserBinaryOperator::Less => {
+                ASTbinaryOperator::Less => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
                         return None;
                     }
@@ -421,7 +445,7 @@ fn lower_expression<'a, 'b>(
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
-                ParserBinaryOperator::LessEq => {
+                ASTbinaryOperator::LessEq => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
                         return None;
                     }
@@ -433,7 +457,7 @@ fn lower_expression<'a, 'b>(
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
-                ParserBinaryOperator::Greater => {
+                ASTbinaryOperator::Greater => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
                         return None;
                     }
@@ -445,7 +469,7 @@ fn lower_expression<'a, 'b>(
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
-                ParserBinaryOperator::GreaterEq => {
+                ASTbinaryOperator::GreaterEq => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
                         return None;
                     }
@@ -457,7 +481,7 @@ fn lower_expression<'a, 'b>(
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
-                ParserBinaryOperator::Eq => {
+                ASTbinaryOperator::Eq => {
                     if left_t != right_t {
                         return None;
                     }
@@ -468,7 +492,7 @@ fn lower_expression<'a, 'b>(
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
-                ParserBinaryOperator::NotEq => {
+                ASTbinaryOperator::NotEq => {
                     if left_t != right_t {
                         return None;
                     }
@@ -479,7 +503,7 @@ fn lower_expression<'a, 'b>(
                     };
                     (op, RegisterType::Bool, RegisterType::Bool.size())
                 },
-                ParserBinaryOperator::Index => todo!(),
+                ASTbinaryOperator::Index => todo!(),
             };
 
             registers.push(op.1);
@@ -499,7 +523,7 @@ fn lower_expression<'a, 'b>(
             let t = registers[reg as usize].clone();
 
             let op = match operator {
-                ParserUnaryOperator::Sub => {
+                ASTunaryOperator::Sub => {
                     if !t.is_signed() || !t.is_unsigned() {
                         return None;
                     } 
@@ -514,7 +538,7 @@ fn lower_expression<'a, 'b>(
                         right: reg,
                     });
                 },
-                ParserUnaryOperator::Not => {
+                ASTunaryOperator::Not => {
                     if !t.is_signed() || !t.is_unsigned() {
                         return None;
                     } 
@@ -529,7 +553,7 @@ fn lower_expression<'a, 'b>(
                         right: registers.len() as u16 - 1,
                     });
                 },
-                ParserUnaryOperator::Invert => {
+                ASTunaryOperator::Invert => {
                     if t != RegisterType::Bool {
                         return None;
                     } 
@@ -544,8 +568,8 @@ fn lower_expression<'a, 'b>(
                         right: registers.len() as u16 - 1,
                     });
                 },
-                ParserUnaryOperator::Dereference => todo!(),
-                ParserUnaryOperator::Address => todo!(),
+                ASTunaryOperator::Dereference => todo!(),
+                ASTunaryOperator::Address => todo!(),
             };
             return Some(registers.len() as u16 - 1);
         },
@@ -692,19 +716,18 @@ fn lower_expression<'a, 'b>(
         Expression::ArrayInit(expressions) => todo!(),
         Expression::StructInit(items) => todo!(),
     }
-
     return None;
 }
 fn lower_statement<'a, 'b>(
     statement: &Statement<'a, 'b>,
     arena: &'b Arena,
     registers: &mut Vec<RegisterType<'a, 'b>>, 
-    blocks: &mut Vec<Block<'a, 'b>>,
-    variables: &mut HashMap<&'a [u8], u16>,
+    blocks: &mut VecArena<Block<'a, 'b>>,
+    variables: &mut Vec<(&'a [u8], u16)>,
     functions: &HashMap<&'a [u8], Function<'a, 'b>>,
     return_type: Option<RegisterType<'a, 'b>>,
+    last_loop_start: Option<i32>,
 ) -> Option<()> {
-
     match statement {
         Statement::Assignment { destination, value } => {
             let instructions = &mut blocks.last_mut()?.instructions;
@@ -712,13 +735,13 @@ fn lower_statement<'a, 'b>(
 
             if let Some(d) = destination {
                 if let Expression::Name(n) = d {
-                    let dest_reg = variables.get(n)?;
+                    let dest_reg = variables.iter().find(|x| &x.0 == n)?;
 
-                    if registers[*dest_reg as usize] != registers[value_reg as usize] {
+                    if registers[dest_reg.1 as usize] != registers[value_reg as usize] {
                         return None;
                     }
 
-                    instructions.push(Instruction::Move { source: value_reg, destination: *dest_reg });
+                    instructions.push(Instruction::Move { source: value_reg, destination: dest_reg.1 });
                 }
                 else { return None; }
             }
@@ -763,13 +786,19 @@ fn lower_statement<'a, 'b>(
             let condition_index = blocks.len()-1;
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
+            let var_len = variables.len();
+
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone())?;
+                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), last_loop_start)?;
+            }
+
+            while variables.len() > var_len {
+                variables.pop();
             }
 
             let next_index = blocks.len();
 
-            blocks[condition_index].instructions.push(Instruction::Branch { 
+            blocks.get_mut(condition_index).unwrap().instructions.push(Instruction::Branch { 
                 condition: condition_reg, 
                 label: next_index as i32, 
             });
@@ -779,13 +808,19 @@ fn lower_statement<'a, 'b>(
                 
                 blocks.push(Block { instructions: arena.vec_capacity(16) });
 
+                let var_len = variables.len();
+
                 for s in *e {
-                    lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone())?;
+                    lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), last_loop_start)?;
+                }
+
+                while variables.len() > var_len {
+                    variables.pop();
                 }
 
                 let next_index = blocks.len();
 
-                blocks[jump_index].instructions.push(Instruction::Jump {  
+                blocks.get_mut(jump_index).unwrap().instructions.push(Instruction::Jump {  
                     label: next_index as i32, 
                 });
             }
@@ -817,8 +852,14 @@ fn lower_statement<'a, 'b>(
 
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
+            let var_len = variables.len();
+
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone())?;
+                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), Some(condition_block_index as i32))?;
+            }
+
+            while variables.len() > var_len {
+                variables.pop();
             }
 
             blocks.last_mut().unwrap().instructions.push(Instruction::Jump { 
@@ -827,7 +868,7 @@ fn lower_statement<'a, 'b>(
 
             let next_block_index = blocks.len();
 
-            blocks[condition_block_index].instructions.push(Instruction::Branch { 
+            blocks.get_mut(condition_block_index).unwrap().instructions.push(Instruction::Branch { 
                 condition: condition_reg, 
                 label: next_block_index as i32, 
             });
@@ -835,7 +876,12 @@ fn lower_statement<'a, 'b>(
             blocks.push(Block { instructions: arena.vec_capacity(16) });
         },
         Statement::Break => todo!(),
-        Statement::Continue => todo!(),
+        Statement::Continue => {
+            if let Some(i) = last_loop_start {
+                blocks.last_mut().unwrap().instructions.push(Instruction::Jump { label: i });
+            }
+            else { return None; }
+        },
         Statement::Declaration { typ, name, value } => {
             let instructions = &mut blocks.last_mut()?.instructions;
             let value_reg = if let Some(v) = value {
@@ -859,10 +905,108 @@ fn lower_statement<'a, 'b>(
                 }
             }
 
-            variables.insert(name, registers.len() as u16 -1);
+            if variables.iter().find(|x| &x.0 == name).is_some() {
+                return None;
+            }
+
+            variables.push((name, registers.len() as u16 -1));
         },
-        Statement::For { declaration, condition, iteration, body } => todo!(),
-        Statement::DoWhile { body, condition } => todo!(),
+        Statement::For { declaration, condition, iteration, body } => {
+            let var_len = variables.len();
+
+            if let Some(d) = declaration {
+                lower_statement(d, arena, registers, blocks, variables, functions, return_type.clone(), last_loop_start)?;
+            }
+            
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+            let condition_block_index = blocks.len()-1;
+
+            let instructions = &mut blocks.last_mut()?.instructions;
+            let condition_reg = if let Some(cond) = condition {
+                let c = lower_expression(cond, arena, registers, instructions, variables, functions)?;
+
+                if registers[c as usize] != RegisterType::Bool {
+                    return None;
+                }
+
+                registers.push(RegisterType::Bool);
+                instructions.push(Instruction::Immediate { destination: registers.len() as u16 -1, value: 1 });
+                instructions.push(Instruction::BinaryOperation { 
+                    size: 1, 
+                    operation: IRbinaryOperator::Xor, 
+                    destination: registers.len() as u16 -1, 
+                    left: registers.len() as u16 -1, 
+                    right: c, 
+                });
+
+                Some(registers.len() as u16 -1)
+            }
+            else { None };
+            
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+
+            for s in *body {
+                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), Some(condition_block_index as i32))?;
+            }
+
+            if let Some(ite) = iteration {
+                lower_statement(ite, arena, registers, blocks, variables, functions, return_type.clone(), Some(condition_block_index as i32))?;
+            }
+
+            while variables.len() > var_len {
+                variables.pop();
+            }
+
+            blocks.last_mut().unwrap().instructions.push(Instruction::Jump { 
+                label: condition_block_index as i32, 
+            });
+
+            let next_block_index = blocks.len();
+
+            if let Some(cond_reg) = condition_reg {
+                blocks.get_mut(condition_block_index).unwrap().instructions.push(Instruction::Branch { 
+                    condition: cond_reg, 
+                    label: next_block_index as i32, 
+                });
+            }
+            else {
+                blocks.get_mut(condition_block_index).unwrap().instructions.push(Instruction::Jump {  
+                    label: next_block_index as i32, 
+                });
+            }
+            
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+        },
+        Statement::DoWhile { body, condition } => {
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+            let start_block_index = blocks.len()-1;
+
+            let var_len = variables.len();
+
+            for s in *body {
+                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), Some(start_block_index as i32))?;
+            }
+
+            while variables.len() > var_len {
+                variables.pop();
+            }
+
+            let instructions = &mut blocks.last_mut()?.instructions;
+            let c = lower_expression(condition, arena, registers, instructions, variables, functions)?;
+
+            if registers[c as usize] != RegisterType::Bool {
+                return None;
+            }
+
+            let next_block_index = blocks.len();
+
+            blocks.get_mut(start_block_index).unwrap().instructions.push(Instruction::Branch { 
+                condition: c, 
+                label: next_block_index as i32, 
+            });
+
+            blocks.push(Block { instructions: arena.vec_capacity(16) });
+        },
     }
-    Some(())
+    return Some(());
 }

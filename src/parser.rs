@@ -17,12 +17,12 @@ pub enum Expression<'a, 'b> {
         parameters: &'b [Expression<'a, 'b>], 
     },
     BinaryOperator{
-        operator: ParserBinaryOperator,
+        operator: ASTbinaryOperator,
         left: &'b Expression<'a, 'b>,
         right: &'b Expression<'a, 'b>,
     },
     UnaryOperator{
-        operator: ParserUnaryOperator,
+        operator: ASTunaryOperator,
         expr: &'b Expression<'a, 'b>,
     },
     Field{
@@ -37,7 +37,7 @@ pub enum Expression<'a, 'b> {
     }
 }
 #[derive(Clone, PartialEq)]
-pub enum ParserBinaryOperator {
+pub enum ASTbinaryOperator {
     Add,
     Sub,
 
@@ -65,7 +65,7 @@ pub enum ParserBinaryOperator {
     Index,
 }
 #[derive(Clone, PartialEq)]
-pub enum ParserUnaryOperator {
+pub enum ASTunaryOperator {
     Sub,
     Address,
     Not,
@@ -349,39 +349,39 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
     }
     Some((left, bracket_depth))
 }
-fn token_to_binary_operator(token: &[u8]) -> Option<ParserBinaryOperator> {
+fn token_to_binary_operator(token: &[u8]) -> Option<ASTbinaryOperator> {
     Some(match token {
-        b"+" => ParserBinaryOperator::Add,
-        b"-" => ParserBinaryOperator::Sub,
-        b"*" => ParserBinaryOperator::Mul,
-        b"/" => ParserBinaryOperator::Div,
-        b"%" => ParserBinaryOperator::Rem,
+        b"+" => ASTbinaryOperator::Add,
+        b"-" => ASTbinaryOperator::Sub,
+        b"*" => ASTbinaryOperator::Mul,
+        b"/" => ASTbinaryOperator::Div,
+        b"%" => ASTbinaryOperator::Rem,
 
-        b"|" => ParserBinaryOperator::Or,
-        b"^" => ParserBinaryOperator::Xor,
+        b"|" => ASTbinaryOperator::Or,
+        b"^" => ASTbinaryOperator::Xor,
         
-        b"&&" => ParserBinaryOperator::LogicalAnd,
-        b"||" => ParserBinaryOperator::LogicalOr,
+        b"&&" => ASTbinaryOperator::LogicalAnd,
+        b"||" => ASTbinaryOperator::LogicalOr,
 
-        b"==" => ParserBinaryOperator::Eq,
-        b"!=" => ParserBinaryOperator::NotEq,
-        b"<" => ParserBinaryOperator::Less,
-        b"<=" => ParserBinaryOperator::LessEq,
-        b">" => ParserBinaryOperator::Greater,
-        b">=" => ParserBinaryOperator::GreaterEq,
+        b"==" => ASTbinaryOperator::Eq,
+        b"!=" => ASTbinaryOperator::NotEq,
+        b"<" => ASTbinaryOperator::Less,
+        b"<=" => ASTbinaryOperator::LessEq,
+        b">" => ASTbinaryOperator::Greater,
+        b">=" => ASTbinaryOperator::GreaterEq,
 
-        b"<<" => ParserBinaryOperator::Shl,
-        b">>" => ParserBinaryOperator::Shr,
+        b"<<" => ASTbinaryOperator::Shl,
+        b">>" => ASTbinaryOperator::Shr,
         _ => return None,
     })
 }
-fn token_to_unary_operator(token: &[u8]) -> Option<ParserUnaryOperator> {
+fn token_to_unary_operator(token: &[u8]) -> Option<ASTunaryOperator> {
     Some(match token {
-        b"-" => ParserUnaryOperator::Sub,
-        b"*" => ParserUnaryOperator::Dereference,
-        b"&" => ParserUnaryOperator::Address,
-        b"!" => ParserUnaryOperator::Invert,
-        b"~" => ParserUnaryOperator::Not,
+        b"-" => ASTunaryOperator::Sub,
+        b"*" => ASTunaryOperator::Dereference,
+        b"&" => ASTunaryOperator::Address,
+        b"!" => ASTunaryOperator::Invert,
+        b"~" => ASTunaryOperator::Not,
         _ => return None,
     })
 }
@@ -493,7 +493,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
             if tokens.next()? != "]" { return None; }
 
             expr = Expression::BinaryOperator { 
-                operator: ParserBinaryOperator::Index, 
+                operator: ASTbinaryOperator::Index, 
                 left: arena.alloc(expr), 
                 right: arena.alloc(index) 
             };    
@@ -641,7 +641,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
 
         if tokens.next()? != ";" { return None; }
 
-        let iteration = if tokens.peek()? != ")" {
+        let iteration = if tokens.peek()? != ";" {
             let first = parse_expression(tokens, arena)?;
 
             let second = if tokens.peek()?.as_bytes().last()? == &b'=' {
@@ -669,6 +669,8 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         else {
             None
         };
+
+        if tokens.next()? != ";" { return None; }
 
         let iteration = if let Some(s) = iteration {
             let a: &Statement<'_, '_> = arena.alloc(s);
