@@ -1,0 +1,4 @@
+u64 test1(u64 a, u64 b) {
+    let c: u64 = 1 + b + b - 4 * 6;
+    return c;
+}

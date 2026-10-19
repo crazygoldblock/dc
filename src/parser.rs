@@ -6,7 +6,7 @@ use crate::{arena::Arena, lexer::Tokenizer};
 
 // enum, switch+case+default, string literal, better int/float literals
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Expression<'a, 'b> {
     Integer(i64),
     Float(f64),
@@ -36,7 +36,7 @@ pub enum Expression<'a, 'b> {
         typ: &'b Type<'a, 'b>,
     }
 }
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum ASTbinaryOperator {
     Add,
     Sub,
@@ -64,7 +64,7 @@ pub enum ASTbinaryOperator {
 
     Index,
 }
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum ASTunaryOperator {
     Sub,
     Address,
@@ -72,7 +72,7 @@ pub enum ASTunaryOperator {
     Invert,
     Dereference,
 }
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Type<'a, 'b> {
     Name(&'a [u8]),
     Pointer(&'b Type<'a, 'b>),
@@ -127,19 +127,19 @@ pub struct Constant<'a, 'b> {
     typ: Type<'a, 'b>,
     value: Expression<'a, 'b>,
 }
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct TypeAlias<'a, 'b> {
     public: bool,
     name: &'a [u8],
     typ: Type<'a, 'b>,
 }
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct Struct<'a, 'b> {
     public: bool,
     name: &'a [u8],
     fields: &'b [(Type<'a, 'b>, &'a [u8])],
 }
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct Union<'a, 'b> {
     public: bool,
     name: &'a [u8],
@@ -203,6 +203,7 @@ fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fr
         return Some(Fragment::GlobalVariable(parse_global_var(tokens, arena, public)?));
     }
 
+    println!("aaa");
     return Some(Fragment::Function(parse_function(tokens, arena, public)?));
 }
 fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<GlobalVariable<'a, 'b>> {
@@ -237,6 +238,8 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
         Some(parse_type(tokens, &arena)?)
     };
 
+    println!("11111");
+
     let name = tokens.next()?;
 
     if tokens.next()? != "(" { return None; }
@@ -253,9 +256,13 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
         parameters.push((t, name));
     }
 
+    println!("222222");
+
     if tokens.next()? != ")" { return None; }
     
     let body = parse_body(tokens, arena)?;
+
+    println!("3333");
 
     return Some(Function{ 
         public,

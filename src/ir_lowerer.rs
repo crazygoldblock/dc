@@ -17,15 +17,18 @@ impl<'a, 'b> CompilationUnit<'a, 'b> {
         vec![Instruction::Immediate{destination: 3, value: 1}]
     }
 }
+#[derive(Debug)]
 pub struct IRfunction<'a, 'b> {
     name: &'a [u8],
     paramaters: &'b [RegisterType<'a, 'b>],
     return_type: Option<RegisterType<'a, 'b>>,
     blocks: &'b [Block<'a, 'b>],
 }
+#[derive(Debug)]
 pub struct Block<'a, 'b> {
     instructions: VecArena<'b, Instruction<'a, 'b>>,
 }
+#[derive(Debug)]
 pub enum Instruction<'a, 'b> {
     Immediate{
         destination: u16,
@@ -92,6 +95,7 @@ pub enum Instruction<'a, 'b> {
 
     }
 }
+#[derive(Debug)]
 pub enum ConvertType {
     FloatToUnsigned,
     FloatToSigned,
@@ -99,6 +103,7 @@ pub enum ConvertType {
     SignedToFloat,
     UnsignedToFloat,
 }
+#[derive(Debug)]
 pub enum ExtTruncType {
     ZeroExtend,
     SignExtend,
@@ -107,6 +112,7 @@ pub enum ExtTruncType {
     Truncate,
     Ftruncate,
 }
+#[derive(Debug)]
 pub enum IRbinaryOperator {
     Add,
     Sub,
@@ -150,14 +156,14 @@ pub enum IRbinaryOperator {
     Fdiv,
     Frem,
 }
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum VariableType<'a, 'b> {
     Primitive(&'a str),
     Struct(Struct<'a, 'b>),
     Union(Union<'a, 'b>),
     Alias(TypeAlias<'a, 'b>),
 }
-fn lower_function<'a, 'b>(
+pub fn lower_function<'a, 'b>(
     arena: &'b Arena, 
     function: &Function<'a, 'b>, 
     functions: &HashMap<&'a [u8], Function<'a, 'b>>,
@@ -194,7 +200,7 @@ fn lower_function<'a, 'b>(
         blocks: blocks.array(),
     });
 }
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 enum RegisterType<'a, 'b> {
     I8,
     I16,

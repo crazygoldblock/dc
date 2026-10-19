@@ -1,4 +1,5 @@
 use std::alloc::{Layout, alloc};
+use std::fmt::{Debug, Formatter, Result};
 use std::mem::{MaybeUninit, transmute};
 use std::ptr::copy_nonoverlapping;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
@@ -90,5 +91,12 @@ impl<'a, T> VecArena<'a, T> {
                 Some(&mut *self.buffer.add(index))
             }
         }
+    }
+}
+impl<'a, T: Debug> Debug for VecArena<'a, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        f.debug_struct("VecArena")
+            .field("buffer", &self.array())
+            .finish()
     }
 }
