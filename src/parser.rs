@@ -114,6 +114,7 @@ pub enum Statement<'a, 'b> {
         condition: Expression<'a, 'b>,
     },
 }
+#[derive(Debug)]
 pub struct Function<'a, 'b> {
     pub public: bool,
     pub return_type: Option<Type<'a, 'b>>,
@@ -603,7 +604,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
 
         if tokens.next().unwrap() != ":" { panic!(); }
 
-        let t = parse_type(tokens, arena).unwrap();
+        let t = parse_type(tokens, arena)?;
 
         let value = if tokens.peek()? == "=" {
             tokens.next();
