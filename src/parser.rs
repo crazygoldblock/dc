@@ -180,6 +180,10 @@ impl<'a> Fragmenter<'a> {
     }
 }
 fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fragment<'a, 'b>> {
+    if tokens.peek().is_none() {
+        return (None);
+    }
+
     if tokens.peek()? == "include" {
         return Some(Fragment::Include(parse_include(tokens)?));
     }
@@ -299,31 +303,17 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
     if b"!*&-~".contains(&tokens.peek()?.as_bytes()[0]) { 
         let prefix = tokens.next()?;
         let e = parse_binary_expression(tokens, arena, min_precedence, bracket_depth)?;
-        if e.1 != bracket_depth {
-            return None;
-        }
         return Some((Expression::UnaryOperator { operator: token_to_unary_operator(tokens.next()?.as_bytes())?, expr: arena.alloc(e.0) }, bracket_depth));
     }
 
     let mut left = if tokens.peek()? == "(" {
         tokens.next();
         let e = parse_binary_expression(tokens, arena, 0, bracket_depth + 1)?;
-        if e.1 != bracket_depth {
-            return None;
-        } 
         e.0
     }
     else {
         parse_primary(tokens, arena)?
     };
-
-    if tokens.peek()? == ")" {
-        if bracket_depth == 0 {
-            return None;
-        }
-        tokens.next();
-        return Some((left, bracket_depth-1));
-    }
 
     while let Some(op_token) = tokens.peek() {
         let precedence = get_operator_precedence(op_token.as_bytes());
@@ -340,9 +330,6 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
         }
         else {
             let e = parse_binary_expression(tokens, arena, precedence + 1, bracket_depth)?;
-            if e.1 != bracket_depth {
-                return None;
-            } 
 
             left = Expression::BinaryOperator {
                 operator: token_to_binary_operator(operator.as_bytes())?,
@@ -351,6 +338,15 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
             };
         }
     }
+
+    if tokens.peek()? == ")" {
+        if bracket_depth == 0 {
+            return None;
+        }
+        tokens.next();
+        return Some((left, bracket_depth-1));
+    }
+
     Some((left, bracket_depth))
 }
 fn token_to_binary_operator(token: &[u8]) -> Option<ASTbinaryOperator> {

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::{arena::{Arena, VecArena}};
+use crate::arena::{Arena, VecArena};
 use crate::parser::{Expression, ASTfunction, Statement, Struct, Type, TypeAlias, Union, ASTbinaryOperator, ASTunaryOperator};
 
 pub struct CompilationUnit<'a, 'b> {
@@ -453,7 +453,7 @@ fn lower_expression<'a, 'b>(
                         (false, true) => IRbinaryOperator::Sless,
                         (false, false) => IRbinaryOperator::Uless,
                     };
-                    (op, RegisterType::Bool, RegisterType::Bool.size())
+                    (op, RegisterType::Bool, left_t.size())
                 },
                 ASTbinaryOperator::LessEq => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
@@ -465,7 +465,7 @@ fn lower_expression<'a, 'b>(
                         (false, true) => IRbinaryOperator::SlessEq,
                         (false, false) => IRbinaryOperator::UlessEq,
                     };
-                    (op, RegisterType::Bool, RegisterType::Bool.size())
+                    (op, RegisterType::Bool, left_t.size())
                 },
                 ASTbinaryOperator::Greater => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
@@ -477,7 +477,7 @@ fn lower_expression<'a, 'b>(
                         (false, true) => IRbinaryOperator::Sgreater,
                         (false, false) => IRbinaryOperator::Ugreater,
                     };
-                    (op, RegisterType::Bool, RegisterType::Bool.size())
+                    (op, RegisterType::Bool, left_t.size())
                 },
                 ASTbinaryOperator::GreaterEq => {
                     if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
@@ -489,7 +489,7 @@ fn lower_expression<'a, 'b>(
                         (false, true) => IRbinaryOperator::SgreaterEq,
                         (false, false) => IRbinaryOperator::UgreaterEq,
                     };
-                    (op, RegisterType::Bool, RegisterType::Bool.size())
+                    (op, RegisterType::Bool, left_t.size())
                 },
                 ASTbinaryOperator::Eq => {
                     if left_t != right_t {
@@ -500,7 +500,7 @@ fn lower_expression<'a, 'b>(
                         true => IRbinaryOperator::Feq,
                         false => IRbinaryOperator::Eq,
                     };
-                    (op, RegisterType::Bool, RegisterType::Bool.size())
+                    (op, RegisterType::Bool, left_t.size())
                 },
                 ASTbinaryOperator::NotEq => {
                     if left_t != right_t {
@@ -511,7 +511,7 @@ fn lower_expression<'a, 'b>(
                         true => IRbinaryOperator::FnotEq,
                         false => IRbinaryOperator::FnotEq,
                     };
-                    (op, RegisterType::Bool, RegisterType::Bool.size())
+                    (op, RegisterType::Bool, left_t.size())
                 },
                 ASTbinaryOperator::Index => todo!(),
             };
