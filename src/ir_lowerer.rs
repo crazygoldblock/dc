@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::{arena::{Arena, VecArena}};
-use crate::parser::{Expression, Function, Statement, Struct, Type, TypeAlias, Union, ASTbinaryOperator, ASTunaryOperator};
+use crate::parser::{Expression, ASTfunction, Statement, Struct, Type, TypeAlias, Union, ASTbinaryOperator, ASTunaryOperator};
 
 pub struct CompilationUnit<'a, 'b> {
     types: HashMap<&'a str, Type<'a, 'b>>,
@@ -165,8 +165,8 @@ pub enum VariableType<'a, 'b> {
 }
 pub fn lower_function<'a, 'b>(
     arena: &'b Arena, 
-    function: &Function<'a, 'b>, 
-    functions: &HashMap<&'a [u8], Function<'a, 'b>>,
+    function: &ASTfunction<'a, 'b>, 
+    functions: &HashMap<&'a [u8], ASTfunction<'a, 'b>>,
 ) -> Option<IRfunction<'a, 'b>> {
     let mut registers = Vec::new();
     let mut blocks = arena.vec_capacity(8);
@@ -292,7 +292,7 @@ fn lower_expression<'a, 'b>(
     registers: &mut Vec<RegisterType<'a, 'b>>, 
     instructions: &mut VecArena<'b, Instruction<'a, 'b>>,
     variables: &mut Vec<(&'a [u8], u16)>,
-    functions: &HashMap<&'a [u8], Function<'a, 'b>>,
+    functions: &HashMap<&'a [u8], ASTfunction<'a, 'b>>,
 ) -> Option<u16> {
 
     match expression {
@@ -734,7 +734,7 @@ fn lower_statement<'a, 'b>(
     registers: &mut Vec<RegisterType<'a, 'b>>, 
     blocks: &mut VecArena<Block<'a, 'b>>,
     variables: &mut Vec<(&'a [u8], u16)>,
-    functions: &HashMap<&'a [u8], Function<'a, 'b>>,
+    functions: &HashMap<&'a [u8], ASTfunction<'a, 'b>>,
     return_type: Option<RegisterType<'a, 'b>>,
     last_loop_start: Option<i32>,
 ) -> Option<()> {
