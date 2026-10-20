@@ -170,6 +170,7 @@ pub fn lower_function<'a, 'b>(
 ) -> Option<IRfunction<'a, 'b>> {
     let mut registers = Vec::new();
     let mut blocks = arena.vec_capacity(8);
+    blocks.push(Block { instructions: arena.vec_capacity(16) });
     let mut variables = Vec::new();
 
     let parameters = arena.alloc_array(RegisterType::Bool, function.parameters.len());
