@@ -1,0 +1,15 @@
+i64 test1(i64 a, i64 b) {
+    let avg: i64 = (a + b) / 2;
+
+    if avg > 10 {
+        return avg;
+    }
+    
+    if a > 10 {
+        return a;
+    }
+    else {
+        a += 10;
+    }
+    return a + b;
+}

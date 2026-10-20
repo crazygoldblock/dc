@@ -236,7 +236,7 @@ impl<'a, 'b> RegisterType<'a, 'b> {
             RegisterType::U64 => 64,
             RegisterType::F32 => 32,
             RegisterType::F64 => 64,
-            RegisterType::Bool => 1,
+            RegisterType::Bool => 8,
             RegisterType::Ptr(_) => 64,
         }
     }
@@ -534,7 +534,7 @@ fn lower_expression<'a, 'b>(
 
             let op = match operator {
                 ASTunaryOperator::Sub => {
-                    if !t.is_signed() || !t.is_unsigned() {
+                    if !t.is_int() {
                         return None;
                     } 
                     let size = t.size();
@@ -549,7 +549,7 @@ fn lower_expression<'a, 'b>(
                     });
                 },
                 ASTunaryOperator::Not => {
-                    if !t.is_signed() || !t.is_unsigned() {
+                    if !t.is_int() {
                         return None;
                     } 
                     let size = t.size();
@@ -571,7 +571,7 @@ fn lower_expression<'a, 'b>(
                     registers.push(t);
                     instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: 1 });
                     instructions.push(Instruction::BinaryOperation { 
-                        size: size, 
+                        size: 8, 
                         operation: IRbinaryOperator::Xor, 
                         destination: registers.len() as u16 - 1, 
                         left: reg, 
@@ -785,7 +785,7 @@ fn lower_statement<'a, 'b>(
             registers.push(RegisterType::Bool);
             instructions.push(Instruction::Immediate { destination: registers.len() as u16 -1, value: 1 });
             instructions.push(Instruction::BinaryOperation { 
-                size: 1, 
+                size: 8, 
                 operation: IRbinaryOperator::Xor, 
                 destination: registers.len() as u16 -1, 
                 left: registers.len() as u16 -1, 
@@ -851,7 +851,7 @@ fn lower_statement<'a, 'b>(
             registers.push(RegisterType::Bool);
             instructions.push(Instruction::Immediate { destination: registers.len() as u16 -1, value: 1 });
             instructions.push(Instruction::BinaryOperation { 
-                size: 1, 
+                size: 8, 
                 operation: IRbinaryOperator::Xor, 
                 destination: registers.len() as u16 -1, 
                 left: registers.len() as u16 -1, 
@@ -942,7 +942,7 @@ fn lower_statement<'a, 'b>(
                 registers.push(RegisterType::Bool);
                 instructions.push(Instruction::Immediate { destination: registers.len() as u16 -1, value: 1 });
                 instructions.push(Instruction::BinaryOperation { 
-                    size: 1, 
+                    size: 8, 
                     operation: IRbinaryOperator::Xor, 
                     destination: registers.len() as u16 -1, 
                     left: registers.len() as u16 -1, 
