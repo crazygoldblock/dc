@@ -207,8 +207,6 @@ fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fr
     if tokens.peek()? == "static" {
         return Some(Fragment::GlobalVariable(parse_global_var(tokens, arena, public)?));
     }
-
-    println!("aaa");
     return Some(Fragment::ASTfunction(parse_function(tokens, arena, public)?));
 }
 fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<GlobalVariable<'a, 'b>> {
@@ -243,8 +241,6 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
         Some(parse_type(tokens, &arena)?)
     };
 
-    println!("11111");
-
     let name = tokens.next()?;
 
     if tokens.next()? != "(" { return None; }
@@ -261,13 +257,9 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
         parameters.push((t, name));
     }
 
-    println!("222222");
-
     if tokens.next()? != ")" { return None; }
     
     let body = parse_body(tokens, arena)?;
-
-    println!("3333");
 
     return Some(ASTfunction{ 
         public,
