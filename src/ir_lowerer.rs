@@ -318,7 +318,7 @@ fn lower_expression<'a, 'b>(
         Expression::BinaryOperator { operator, left, right } => {
             let left_reg = lower_expression(left, arena, registers, instructions, variables, functions)?;
 
-            let right_reg = lower_expression(left, arena, registers, instructions, variables, functions)?;
+            let right_reg = lower_expression(right, arena, registers, instructions, variables, functions)?;
 
             let left_t = registers[left_reg as usize].clone();
             let right_t = registers[right_reg as usize].clone();
