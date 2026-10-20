@@ -175,7 +175,10 @@ pub fn lower_function<'a, 'b>(
     let parameters = arena.alloc_array(RegisterType::Bool, function.parameters.len());
 
     for (i, p) in function.parameters.iter().enumerate() {
-        let reg_type = RegisterType::from_str(p.1)?;
+        let reg_type = if let Type::Name(p_typ) = p.0 {
+            RegisterType::from_str(p_typ)?
+        }
+        else { return None; };
         parameters[i] = reg_type.clone();
         registers.push(reg_type);
         variables.push((p.1, i as u16));
