@@ -18,6 +18,7 @@ fn test1() {
     let functions = HashMap::new();
 
     if let Fragment::Function(f) = f1 {
+        println!("AST FUNCTION: {:?}", f);
         let cf = lower_function(&arena, &f, &functions).unwrap();
 
         let res = format!("{:?}", cf);

@@ -78,7 +78,7 @@ pub enum Type<'a, 'b> {
     Pointer(&'b Type<'a, 'b>),
     Array(&'b Type<'a, 'b>, Expression<'a, 'b>),
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Statement<'a, 'b> {
     Assignment{
         destination: Option<(Expression<'a, 'b>)>,
@@ -121,6 +121,7 @@ pub struct Function<'a, 'b> {
     pub parameters: &'b [(Type<'a, 'b>, &'a [u8])],
     pub body: &'b [Statement<'a, 'b>],
 }
+#[derive(Debug)]
 pub struct Constant<'a, 'b> {
     public: bool,
     name: &'a [u8],
@@ -145,15 +146,18 @@ pub struct Union<'a, 'b> {
     name: &'a [u8],
     fields: &'b [(Type<'a, 'b>, &'a [u8])],
 }
+#[derive(Debug)]
 pub struct Include<'a> {
     path: &'a [u8],
 }
+#[derive(Debug)]
 pub struct GlobalVariable<'a, 'b> {
     public: bool,
     name: &'a [u8],
     typ: Type<'a, 'b>,
     value: Expression<'a, 'b>,
 }
+#[derive(Debug)]
 pub enum Fragment<'a, 'b> {
     Function(Function<'a, 'b>),
     Include(Include<'a>),
@@ -297,7 +301,7 @@ fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opt
     }
     Some(e.0)
 }
-fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, min_precedence: u8, bracket_depth: usize) -> Option<(Expression<'a, 'b>, usize)> {
+fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, min_precedence: i8, bracket_depth: usize) -> Option<(Expression<'a, 'b>, usize)> {
 
     if b"!*&-~".contains(&tokens.peek()?.as_bytes()[0]) { 
         let prefix = tokens.next()?;
@@ -366,6 +370,7 @@ fn token_to_binary_operator(token: &[u8]) -> Option<ASTbinaryOperator> {
 
         b"|" => ASTbinaryOperator::Or,
         b"^" => ASTbinaryOperator::Xor,
+        b"&" => ASTbinaryOperator::And,
         
         b"&&" => ASTbinaryOperator::LogicalAnd,
         b"||" => ASTbinaryOperator::LogicalOr,
@@ -511,7 +516,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
     }
     Some(expr)
 }
-fn get_operator_precedence(op: &[u8]) -> u8 {
+fn get_operator_precedence(op: &[u8]) -> i8 {
     match op {
         b"||" => 1,
         b"&&" => 2,
@@ -524,7 +529,7 @@ fn get_operator_precedence(op: &[u8]) -> u8 {
         b"+" | b"-" => 9,
         b"*" | b"/" | b"%" => 10,
         b"as" => 11,
-        _ => 0,
+        _ => -1,
     }
 }
 fn parse_body<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<&'b [Statement<'a, 'b>]> {
@@ -596,7 +601,9 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         
         let name = tokens.next()?;
 
-        let t = parse_type(tokens, arena)?;
+        if tokens.next().unwrap() != ":" { panic!(); }
+
+        let t = parse_type(tokens, arena).unwrap();
 
         let value = if tokens.peek()? == "=" {
             tokens.next();

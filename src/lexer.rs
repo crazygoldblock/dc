@@ -6,12 +6,16 @@ pub struct Tokenizer<'a> {
     state: State,
     index: usize,
 }
+#[derive(Debug)]
 pub struct Token<'a> {
     token: &'a [u8],
 }
 impl<'a> Token<'a> {
     pub fn as_bytes(&self) -> &'a [u8] {
         self.token
+    } 
+    pub fn as_str(&self) -> &'a str {
+        str::from_utf8(self.token).unwrap()
     } 
 }
 impl<'a> PartialEq<&str> for Token<'a> {
@@ -146,5 +150,8 @@ impl<'a> Tokenizer<'a> {
     pub fn restore(&mut self, checkpoint: Checkpoint) {
         self.state = checkpoint.state;
         self.index = checkpoint.index;
+    }
+    pub fn rest(&self) -> &'a str {
+        str::from_utf8(&self.buffer[self.index..]).unwrap()
     }
 }
