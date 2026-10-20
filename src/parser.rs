@@ -115,7 +115,7 @@ pub enum Statement<'a, 'b> {
     },
 }
 #[derive(Debug)]
-pub struct Function<'a, 'b> {
+pub struct ASTfunction<'a, 'b> {
     pub public: bool,
     pub return_type: Option<Type<'a, 'b>>,
     pub name: &'a [u8],
@@ -160,7 +160,7 @@ pub struct GlobalVariable<'a, 'b> {
 }
 #[derive(Debug)]
 pub enum Fragment<'a, 'b> {
-    Function(Function<'a, 'b>),
+    ASTfunction(ASTfunction<'a, 'b>),
     Include(Include<'a>),
     Constant(Constant<'a, 'b>),
     TypeAlias(TypeAlias<'a, 'b>),
@@ -209,7 +209,7 @@ fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fr
     }
 
     println!("aaa");
-    return Some(Fragment::Function(parse_function(tokens, arena, public)?));
+    return Some(Fragment::ASTfunction(parse_function(tokens, arena, public)?));
 }
 fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<GlobalVariable<'a, 'b>> {
     if tokens.next()? != "static" { return None; }
@@ -235,7 +235,7 @@ fn parse_include<'a>(tokens: &mut Tokenizer<'a>) -> Option<Include<'a>> {
 
     Some(Include{ path: path.as_bytes() })
 }
-fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Function<'a, 'b>> {
+fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<ASTfunction<'a, 'b>> {
     let return_type = if tokens.peek()? == "void" {
         None
     }
@@ -269,7 +269,7 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
 
     println!("3333");
 
-    return Some(Function{ 
+    return Some(ASTfunction{ 
         public,
         return_type, 
         name: name.as_bytes(), 
