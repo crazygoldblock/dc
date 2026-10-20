@@ -662,7 +662,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
                     Some(Statement::Assignment { destination: Some(first), value: expr })
                 }
                 else {
-                    let operator = token_to_binary_operator(&op.as_bytes()[..op.as_bytes().len()-2])?;
+                    let operator = token_to_binary_operator(&op.as_bytes()[..op.as_bytes().len()-2]).unwrap();
                     let new_expr = Expression::BinaryOperator { operator, left: arena.alloc(first.clone()), right: arena.alloc(expr) };
                     Some(Statement::Assignment { destination: Some(first), value: new_expr })
                 }
