@@ -3,20 +3,8 @@
 use std::collections::HashMap;
 
 use crate::arena::{Arena, VecArena};
-use crate::parser::{Expression, ASTfunction, Statement, Struct, Type, TypeAlias, Union, ASTbinaryOperator, ASTunaryOperator};
+use crate::parser::{Expression, ASTfunction, Statement, Struct, Type, Union, ASTbinaryOperator, ASTunaryOperator};
 
-pub struct CompilationUnit<'a, 'b> {
-    types: HashMap<&'a str, Type<'a, 'b>>,
-    arena: &'b Arena,
-}
-impl<'a, 'b> CompilationUnit<'a, 'b> {
-    pub fn new(arena: &'b Arena) -> CompilationUnit<'a, 'b> {
-        CompilationUnit { types: HashMap::new(), arena }
-    }
-    pub fn compile(&mut self, f: IRfunction<'a, 'b>) -> Vec<Instruction<'a, 'b>> {
-        vec![Instruction::Immediate{destination: 3, value: 1}]
-    }
-}
 #[derive(Debug)]
 pub struct IRfunction<'a, 'b> {
     name: &'a [u8],
@@ -30,6 +18,7 @@ pub struct Block<'a, 'b> {
 }
 #[derive(Debug)]
 pub enum Instruction<'a, 'b> {
+    NoOperation,
     Immediate{
         destination: u16,
         value: i64,
@@ -55,11 +44,11 @@ pub enum Instruction<'a, 'b> {
         left: u16,
         right: u16,
     },
-    Call{
-        start: &'a [u8],
-        parameters: &'b [u16],
-        destination: Option<u16>,
-    },
+    Call(&'b ( 
+        &'a [u8],
+        &'b [u16],
+        Option<u16>),
+    ),
     Return{
         value: Option<u16>,
     },
@@ -161,7 +150,6 @@ pub enum VariableType<'a, 'b> {
     Primitive(&'a str),
     Struct(Struct<'a, 'b>),
     Union(Union<'a, 'b>),
-    Alias(TypeAlias<'a, 'b>),
 }
 pub fn lower_function<'a, 'b>(
     arena: &'b Arena, 
@@ -686,7 +674,7 @@ fn lower_expression<'a, 'b>(
                 return None;
             }
 
-            let register_paratemers = arena.alloc_array(0u16, f.parameters.len());
+            let register_paratemers: &mut [u16] = arena.alloc_array(0u16, f.parameters.len());
 
             for (i, par) in f.parameters.iter().enumerate() {
                 let register = lower_expression(&parameters[i], arena, registers, instructions, variables, functions)?;
@@ -714,11 +702,13 @@ fn lower_expression<'a, 'b>(
             }
             else { None };
 
-            instructions.push(Instruction::Call { 
-                start: name, 
-                parameters: register_paratemers, 
-                destination: if return_type.is_some() { Some(registers.len() as u16 -1) } else { None }, 
-            });
+            let register_paratemers: &[u16] = register_paratemers;
+
+            instructions.push(Instruction::Call ( 
+                arena.alloc((name, 
+                register_paratemers, 
+                if return_type.is_some() { Some(registers.len() as u16 -1) } else { None })) 
+            ));
 
             return if return_type.is_some() { Some(registers.len() as u16 -1) } else { Some(u16::MAX) };
         },
@@ -893,27 +883,17 @@ fn lower_statement<'a, 'b>(
             else { return None; }
         },
         Statement::Declaration { typ, name, value } => {
-            let instructions = &mut blocks.last_mut()?.instructions;
-            let value_reg = if let Some(v) = value {
-                lower_expression(v, arena, registers, instructions, variables, functions)?
-            } 
-            else { u16::MAX };
-
-            let var_type = if let Type::Name(n) = typ {
-                n
-            }
-            else { return None; };
-
+            let Type::Name(var_type) = typ else { return None; };
             let reg_t = RegisterType::from_str(*var_type)?;
 
-            if value_reg == u16::MAX {
-                registers.push(reg_t);
-            }
-            else {
+            if let Some(v) = value {
+                let value_reg = lower_expression(v, arena, registers, instructions, variables, functions)?;
                 if registers[value_reg as usize] != reg_t {
                     return None;
                 }
             }
+
+            registers.push(reg_t);
 
             if variables.iter().find(|x| &x.0 == name).is_some() {
                 return None;

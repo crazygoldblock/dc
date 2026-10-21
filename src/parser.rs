@@ -130,12 +130,6 @@ pub struct Constant<'a, 'b> {
     value: Expression<'a, 'b>,
 }
 #[derive(PartialEq, Clone, Debug)]
-pub struct TypeAlias<'a, 'b> {
-    public: bool,
-    name: &'a [u8],
-    typ: Type<'a, 'b>,
-}
-#[derive(PartialEq, Clone, Debug)]
 pub struct Struct<'a, 'b> {
     public: bool,
     name: &'a [u8],
@@ -156,30 +150,18 @@ pub struct GlobalVariable<'a, 'b> {
     public: bool,
     name: &'a [u8],
     typ: Type<'a, 'b>,
-    value: Expression<'a, 'b>,
+    value: Option<Expression<'a, 'b>>,
 }
 #[derive(Debug)]
 pub enum Fragment<'a, 'b> {
     ASTfunction(ASTfunction<'a, 'b>),
     Include(Include<'a>),
     Constant(Constant<'a, 'b>),
-    TypeAlias(TypeAlias<'a, 'b>),
     Struct(Struct<'a, 'b>),
     Union(Union<'a, 'b>),
     GlobalVariable(GlobalVariable<'a, 'b>),
 }
-pub struct Fragmenter<'a> {
-    tokenizer: Tokenizer<'a>,
-}
-impl<'a> Fragmenter<'a> {
-    pub fn next<'b>(&mut self, arena: &'b Arena) -> Option<Fragment<'a, 'b>> {
-        parse_file(&mut self.tokenizer, &arena)
-    }
-    pub fn new(tokenizer: Tokenizer) -> Fragmenter {
-        Fragmenter { tokenizer }
-    }
-}
-fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fragment<'a, 'b>> {
+pub fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fragment<'a, 'b>> {
     if tokens.peek().is_none() {
         return (None);
     }
@@ -188,13 +170,8 @@ fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fr
         return Some(Fragment::Include(parse_include(tokens)?));
     }
 
-    let public = if tokens.peek()? == "public" {
-        tokens.next();
-        true
-    }
-    else {
-        false
-    };  
+    let public = tokens.peek()? == "public";
+    if tokens.peek()? == "public" { tokens.next(); }
 
     if tokens.peek()? == "const" {
         return Some(Fragment::Constant(parse_constant(tokens, arena, public)?));
@@ -205,9 +182,6 @@ fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fr
     if tokens.peek()? == "union" {
         return Some(Fragment::Union(parse_union(tokens, arena, public)?));
     }
-    if tokens.peek()? == "type" {
-        return Some(Fragment::TypeAlias(parse_alias(tokens, arena, public)?));
-    }
     if tokens.peek()? == "static" {
         return Some(Fragment::GlobalVariable(parse_global_var(tokens, arena, public)?));
     }
@@ -215,50 +189,43 @@ fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fr
 }
 fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<GlobalVariable<'a, 'b>> {
     if tokens.next()? != "static" { return None; }
-
+    
+    let typ = parse_type(tokens, arena)?;
     let name = tokens.next()?;
 
-    if tokens.next()? != ":" { return None; }
-
-    let t = parse_type(tokens, arena)?;
-
-    if tokens.next()? != "=" { return None; }
-
-    let value = parse_expression(tokens, arena)?;
+    let value = if tokens.next()? == "=" {
+        tokens.next();
+        Some(parse_expression(tokens, arena)?)
+    }
+    else { None };
 
     if tokens.next()? != ";" { return None; }
 
-    return Some(GlobalVariable { public, name: name.as_bytes(), typ: t, value });
+    return Some(GlobalVariable { public, name: name.as_bytes(), typ, value });
 }
 fn parse_include<'a>(tokens: &mut Tokenizer<'a>) -> Option<Include<'a>> {
     if tokens.next()? != "include" { return None; }
-    
     let path = tokens.until_semicolon()?;
 
     Some(Include{ path: path.as_bytes() })
 }
 fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<ASTfunction<'a, 'b>> {
-    let return_type = if tokens.peek()? == "void" {
-        None
-    }
-    else {
+    let return_type = if tokens.peek()? != "void" {
         Some(parse_type(tokens, &arena)?)
-    };
+    }
+    else { None };
 
     let name = tokens.next()?;
 
     if tokens.next()? != "(" { return None; }
-
     let mut parameters = arena.vec_capacity(16);
 
-    while tokens.peek().is_some_and(|x| x != ")") {
-
-        if tokens.peek()? == "," { tokens.next(); }
-
+    while tokens.peek()? != ")" {
         let t = parse_type(tokens, &arena)?;
         let name = tokens.next()?.as_bytes();
 
         parameters.push((t, name));
+        if tokens.peek()? == "," { tokens.next(); }
     }
 
     if tokens.next()? != ")" { return None; }
@@ -274,22 +241,21 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
     });
 }
 fn parse_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Type<'a, 'b>> {
-    let first = tokens.next()?;
-    if first == "*" {
+    if tokens.peek()? == "*" {
+        tokens.next()?;
         return Some(Type::Pointer(arena.alloc(parse_type(tokens, arena)?)));
     }
-    if first == "[" {
+    if tokens.peek()? == "[" {
+        tokens.next()?;
         let t = arena.alloc(parse_type(tokens, arena)?);
         
         if tokens.next()? != ";" { return None; }
-
         let len = parse_expression(tokens, arena)?;
-
         if tokens.next()? != "]" { return None; }
 
         return Some(Type::Array(t, len));
     }
-    return Some(Type::Name(first.as_bytes()));
+    return Some(Type::Name(tokens.next()?.as_bytes()));
 }
 fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Expression<'a, 'b>> {
     let mut bracket_depth = 0;
@@ -389,47 +355,35 @@ fn token_to_unary_operator(token: &[u8]) -> Option<ASTunaryOperator> {
     })
 }
 fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Expression<'a, 'b>> {
-    let mut token = tokens.peek()?;
-
-    if token == "[" {
+    if tokens.peek()? == "[" {
         tokens.next();
         let mut parameters = arena.vec_capacity(16);
         
-
         while tokens.peek()? != "]" {
-
+            parameters.push(parse_expression(tokens, &arena)?);
             if tokens.peek()? == "," { tokens.next(); }
-
-            let expr = parse_expression(tokens, &arena)?;
-
-            parameters.push(expr);
         }
         if tokens.next()? != "]" { return None; }
 
         return Some(Expression::ArrayInit(parameters.array()));
     }
-    if token == "{" {
+    if tokens.peek()? == "{" {
         tokens.next();
         let mut fields = arena.vec_capacity(16);
 
         while tokens.peek()? != "}" {
-
-            if tokens.peek()? == "," { tokens.next(); }
-
             let name = tokens.next()?;
-
             if tokens.next()? != ":" { return None; }
-
             let value = parse_expression(tokens, &arena)?;
 
             fields.push((name.as_bytes(), value));
+            if tokens.peek()? == "," { tokens.next(); }
         }
         if tokens.next()? != "}" { return None; }
 
         return Some(Expression::StructInit(fields.array()));
     }
-
-    if let Ok(val) = str::from_utf8(token.as_bytes()).unwrap().parse::<i64>() {
+    if let Ok(val) = str::from_utf8(tokens.peek()?.as_bytes()).unwrap().parse::<i64>() {
         let checkpoint = tokens.checkpoint();
         tokens.next();
 
@@ -444,35 +398,28 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
             return Some(Expression::Integer(val));
         }
     }
-    
-    if token == "true" {
+    if tokens.peek()? == "true" {
         tokens.next();
         return Some(Expression::Bool(true));
     }
-    
-    if token == "false" {
+    if tokens.peek()? == "false" {
         tokens.next();
         return Some(Expression::Bool(false));
     }
 
     tokens.next();
-    let mut expr = Expression::Name(token.as_bytes());
+    let mut expr = Expression::Name(tokens.peek()?.as_bytes());
 
     loop {
         if tokens.peek()? == "(" {
             tokens.next();
             let mut parameters = arena.vec_capacity(16);
 
-            while tokens.peek().is_some_and(|x| x != ")") {
-                if tokens.peek()? == "," {
-                    tokens.next();
-                }
-
-                let arg = parse_expression(tokens, arena)?;
-                parameters.push(arg);
+            while tokens.peek()? != ")" {
+                parameters.push(parse_expression(tokens, arena)?);
+                if tokens.peek()? == "," { tokens.next(); }
             }
-
-            if tokens.next()? != ")" { return None; }
+            tokens.next()?;
  
             expr = Expression::Call {
                 expr: arena.alloc(expr),
@@ -481,18 +428,15 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
         } 
         else if tokens.peek()? == "." {
             tokens.next();
-            let field_name = tokens.next()?;
 
             expr = Expression::Field {
                 expr: arena.alloc(expr),
-                field: field_name.as_bytes(),
+                field: tokens.next()?.as_bytes(),
             };
         }
         else if tokens.peek()? == "[" {
             tokens.next();
-
             let index = parse_expression(tokens, arena)?;
-
             if tokens.next()? != "]" { return None; }
 
             expr = Expression::BinaryOperator { 
@@ -525,28 +469,23 @@ fn get_operator_precedence(op: &[u8]) -> i8 {
 }
 fn parse_body<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<&'b [Statement<'a, 'b>]> {
     if tokens.next()? != "{" { return None; }
-
     let mut statements = arena.vec_capacity(64);
 
-    while tokens.peek().is_some_and(|x| x != "}") {
+    while tokens.peek()? != "}" {
         statements.push(parse_statement(tokens, &arena)?);
     }
-
     if tokens.next()? != "}" { return None; }
 
     Some(statements.array())
 }
 fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Statement<'a, 'b>> {
-
     if tokens.peek()? == "return" {
         tokens.next();
 
         let value = if tokens.peek()? != ";" {
             Some(parse_expression(tokens, arena)?)
         }
-        else {
-            None
-        };
+        else { None };
         tokens.next();
 
         return Some(Statement::Return { value });
@@ -565,7 +504,6 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         tokens.next();
         
         let condition = parse_expression(tokens, arena)?;
-
         let body = parse_body(tokens, arena)?;
 
         return Some(Statement::While { condition, body });
@@ -574,116 +512,42 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         tokens.next();
         
         let condition = parse_expression(tokens, arena)?;
-
         let body = parse_body(tokens, arena)?;
 
         let else_body = if tokens.peek()? == "else" {
             tokens.next();
             Some(parse_body(tokens, arena)?)
         }
-        else {
-            None
-        };
+        else { None };
 
         return Some(Statement::If { condition, body, else_body });
     }
-    if tokens.peek()? == "let" {
-        tokens.next();
-        
-        let name = tokens.next()?;
-
-        if tokens.next().unwrap() != ":" { panic!(); }
-
-        let t = parse_type(tokens, arena)?;
-
-        let value = if tokens.peek()? == "=" {
-            tokens.next();
-            Some(parse_expression(tokens, arena)?)
-        }
-        else {
-            None
-        };
-
-        if tokens.next()? != ";" { return None; }
-
-        return Some(Statement::Declaration { typ: t, name: name.as_bytes(), value });
-    }
     if tokens.peek()? == "for" {
         tokens.next();
-
-        if tokens.next()? != "(" { return None; }
+        if tokens.peek()? != "(" { tokens.next()?; }
 
         let declaration = if tokens.peek()? != ";" {
-            if tokens.next()? != "let" { return None; }
-
-            let name = tokens.next()?;
-
-            let t = parse_type(tokens, arena)?;
-
-            let value = if tokens.peek()? == "=" {
-                tokens.next();
-                Some(parse_expression(tokens, arena)?)
-            }
-            else {
-                None
-            };            
-
-            let tmp: &Statement<'_, '_> = arena.alloc(Statement::Declaration { typ: t, name: name.as_bytes(), value });
-            Some(tmp)
+            let d = parse_declaration(tokens, arena)?;
+            let r: &Statement<'_, '_> = arena.alloc(Statement::Declaration { typ: d.1, name: d.0, value: d.2 });
+            Some(r)
         }
-        else {
-            None
-        };
-
-        if tokens.next()? != ";" { return None; }
+        else { None };
 
         let condition = if tokens.peek()? != ";" {
             Some(parse_expression(tokens, arena)?)
         }
-        else {
-            None
-        };
+        else { None };
 
         if tokens.next()? != ";" { return None; }
 
         let iteration = if tokens.peek()? != ";" {
-            let first = parse_expression(tokens, arena)?;
-
-            let second = if tokens.peek()?.as_bytes().last()? == &b'=' {
-                let op = tokens.next()?;
-                Some((parse_expression(tokens, arena)?, op))
-            }
-            else {
-                None
-            };
-
-            if let Some((expr, op)) = second {
-                if op == "=" {
-                    Some(Statement::Assignment { destination: Some(first), value: expr })
-                }
-                else {
-                    let operator = token_to_binary_operator(&op.as_bytes()[..op.as_bytes().len()-2]).unwrap();
-                    let new_expr = Expression::BinaryOperator { operator, left: arena.alloc(first.clone()), right: arena.alloc(expr) };
-                    Some(Statement::Assignment { destination: Some(first), value: new_expr })
-                }
-            }
-            else {
-                Some(Statement::Assignment { destination: None, value: first })
-            }
-        }
-        else {
-            None
-        };
-
-        if tokens.next()? != ";" { return None; }
-
-        let iteration = if let Some(s) = iteration {
-            let a: &Statement<'_, '_> = arena.alloc(s);
-            Some(a)
+            let a = parse_assignment(tokens, arena)?;
+            let r: &Statement<'_, '_> = arena.alloc(a);
+            Some(r)
         }
         else { None };
 
-        if tokens.next()? != ")" { return None; }
+        if tokens.peek()? != ")" { tokens.next()?; }
 
         let body = parse_body(tokens, arena)?;
 
@@ -691,73 +555,43 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
     }
     if tokens.peek()? == "do" {
         tokens.next()?;
-        
         let body = parse_body(tokens, arena)?;
 
         if tokens.next()? != "while" { return None; }
-
         let condition = parse_expression(tokens, arena)?;
-
         if tokens.next()? != ";" { return None; }
 
         return Some(Statement::DoWhile { body, condition })
     }
-
-    let first = parse_expression(tokens, arena)?;
-
-    let second = if tokens.peek()?.as_bytes().last()? == &b'=' {
-        let op = tokens.next()?;
-        Some((parse_expression(tokens, arena)?, op))
+    
+    let cp = tokens.checkpoint();
+    if let Some(a) = parse_assignment(tokens, arena) {
+        return Some(a);
     }
-    else {
-        None
-    };
-
-    if tokens.next()? != ";" { return None; }
-
-    if let Some((expr, op)) = second {
-
-        if op == "=" {
-            return Some(Statement::Assignment { destination: Some(first), value: expr });
-        }
-        else {
-            let operator = token_to_binary_operator(&op.as_bytes()[..op.as_bytes().len()-1])?;
-            let new_expr = Expression::BinaryOperator { operator, left: arena.alloc(first.clone()), right: arena.alloc(expr) };
-            return Some(Statement::Assignment { destination: Some(first), value: new_expr });
-        }
-    }
-    else {
-        return Some(Statement::Assignment { destination: None, value: first });
-    }
+    tokens.restore(cp);
+    
+    let d = parse_declaration(tokens, arena)?;
+    return Some(Statement::Declaration { typ: d.1, name: d.0, value: d.2 });
 }
 fn parse_struct<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Struct<'a, 'b>> {
     if tokens.next()? != "struct" { return None; }
 
     let name = tokens.next()?;
 
-    if tokens.next()? != "{" { return None; }
+    let fields = parse_composite_type(tokens, arena)?;
 
-    let mut fields = arena.vec_capacity(16);
-
-    while tokens.peek()? != "}" {
-        if tokens.peek()? == "," {
-            tokens.next();
-        }
-
-        let t = parse_type(tokens, arena)?;
-        let name = tokens.next()?;
-            
-        fields.push((t, name.as_bytes()));
-    }
-
-    if tokens.next()? != "}" { return None; }
-
-    return Some(Struct { public, name: name.as_bytes(), fields: fields.array() });
-
+    return Some(Struct { public, name: name.as_bytes(), fields });
 }
 fn parse_union<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Union<'a, 'b>> {
     if tokens.next()? != "union" { return None; }
 
+    let name = tokens.next()?;
+
+    let fields = parse_composite_type(tokens, arena)?;
+
+    return Some(Union { public, name: name.as_bytes(), fields });
+}
+fn parse_composite_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<&'b [(Type<'a, 'b>, &'a [u8])]> {
     let name = tokens.next()?;
 
     if tokens.next()? != "{" { return None; }
@@ -777,32 +611,49 @@ fn parse_union<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: boo
 
     if tokens.next()? != "}" { return None; }
 
-    return Some(Union { public, name: name.as_bytes(), fields: fields.array() });
-
-}
-fn parse_alias<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<TypeAlias<'a, 'b>> {
-    if tokens.next()? != "type" { return None; }
-
-    let name = tokens.next()?;
-
-    if tokens.next()? != "=" { return None; }
-
-    let t = parse_type(tokens, arena)?;
-    
-    return Some(TypeAlias { public, name: name.as_bytes(), typ: t })
+    return Some(fields.array());
 }
 fn parse_constant<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Constant<'a, 'b>> {
     if tokens.next()? != "const" { return None; }
 
-    let name = tokens.next()?;
-
-    if tokens.next()? != ":" { return None; }
+    let decl = parse_declaration(tokens, arena)?;
+    
+    return Some(Constant { public, name: decl.0, typ: decl.1, value: decl.2? });
+}
+fn parse_declaration<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<(&'a [u8], Type<'a, 'b>, Option<Expression<'a, 'b>>)> {
 
     let t = parse_type(tokens, arena)?;
 
-    if tokens.next()? != "=" { return None; }
+    let name = tokens.next()?;
 
-    let value = parse_expression(tokens, arena)?;
+    let value = if tokens.peek()? != ";" {
+        if tokens.next()? != "=" { return None; }
+        Some(parse_expression(tokens, arena)?)
+    }
+    else { None };
+
+    if tokens.next()? != ";" { return None; }
     
-    return Some(Constant { public, name: name.as_bytes(), typ: t, value });
+    Some((name.as_bytes(), t, value))
+}
+fn parse_assignment<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Statement<'a, 'b>> {
+    let first = parse_expression(tokens, arena)?;
+
+    let (destination, value) = if tokens.peek()? != ";" {
+        let op = tokens.next()?;
+        let mut expr = parse_expression(tokens, arena)?;
+
+        if op != "=" {
+            let operator = token_to_binary_operator(&op.as_bytes().split_last()?.1)?;
+            expr = Expression::BinaryOperator { operator, left: arena.alloc(first.clone()), right: arena.alloc(expr) };
+        }
+        (Some(first), expr)
+    }
+    else {
+        (None, first)
+    };
+
+    if tokens.next()? != ";" { return None; }
+
+    Some(Statement::Assignment { destination, value })
 }
