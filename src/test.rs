@@ -3,7 +3,10 @@ fn check_ast_and_ir() {
     use std::collections::HashMap;
     use std::fs::{read_dir, read_to_string, write, exists};
 
-    use crate::{arena::Arena, ir_lowerer::lower_function, lexer::Tokenizer, parser::{Fragment, Fragmenter}};
+    use crate::arena::Arena;
+    use crate::ir_lowerer::lower_function;
+    use crate::lexer::Tokenizer;
+    use crate::parser::{Fragment, parse_file};
 
     for entry in read_dir("./inputs").unwrap() {
         let entry = entry.unwrap();
@@ -13,14 +16,13 @@ fn check_ast_and_ir() {
             if let Some(ext) = path.extension() {
                 if ext == "dl" {
                     let file = read_to_string(&path).unwrap();
-                    let t = Tokenizer::new(file.as_bytes());
-                    let mut f = Fragmenter::new(t);
+                    let mut tokenizer = Tokenizer::new(file.as_bytes());
                     let arena = Arena::new();
 
                     let mut ast = String::new();
                     let mut ir = String::new();
 
-                    let mut frag = f.next(&arena);
+                    let mut frag = parse_file(&mut tokenizer, &arena);
                     while let Some(fr) = frag {
                         ast += &format!("{:?}", fr);
 
@@ -29,7 +31,7 @@ fn check_ast_and_ir() {
                             let cf = lower_function(&arena, &func, &functions).unwrap();
                             ir += &format!("{:?}", cf);
                         }
-                        frag = f.next(&arena);
+                        frag = parse_file(&mut tokenizer, &arena);
                     }
                     let output_path = format!("./inputs/{}", path.file_stem().unwrap().to_str().unwrap());
 

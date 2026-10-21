@@ -883,6 +883,7 @@ fn lower_statement<'a, 'b>(
             else { return None; }
         },
         Statement::Declaration { typ, name, value } => {
+            let instructions = &mut blocks.last_mut()?.instructions;
             let Type::Name(var_type) = typ else { return None; };
             let reg_t = RegisterType::from_str(*var_type)?;
 
