@@ -153,6 +153,48 @@ pub struct GlobalVariable<'a, 'b> {
     value: Option<Expression<'a, 'b>>,
 }
 #[derive(Debug)]
+pub enum ParseError<'a> {
+    EndOfFile,
+    UnexpectedEndOfFile{
+        line: &'a str,
+    },
+    ExpectedKeyword{
+        expected: &'static str,
+        found: &'a str,
+        line: &'a str,
+    },
+    ExpectedSymbol{
+        expected: &'static str,
+        found: &'a str,
+        line: &'a str,
+    },
+    ExpectedIdentifier{
+        found: &'a str,
+        line: &'a str,
+    },
+    ExpectedOperator{
+        found: &'a str,
+        line: &'a str,
+    },
+    UnclosedBrackets{
+        line: &'a str,
+    },
+    UnOpenedBrackets{
+        line: &'a str,
+    },
+}
+impl<'a> ParseError<'a> {
+    pub fn keyword(expected: &'static str, tokens: &mut Tokenizer<'a>) -> ParseError<'a> {
+        ParseError::ExpectedKeyword { expected, found: tokens.last(), line: tokens.get_current_line() }
+    }
+    pub fn symbol(expected: &'static str, tokens: &mut Tokenizer<'a>) -> ParseError<'a> {
+        ParseError::ExpectedSymbol { expected, found: tokens.last(), line: tokens.get_current_line() }
+    }
+    pub fn identifier(tokens: &mut Tokenizer<'a>) -> ParseError<'a> {
+        ParseError::ExpectedIdentifier { found: tokens.last(), line: tokens.get_current_line() }
+    }
+}
+#[derive(Debug)]
 pub enum Fragment<'a, 'b> {
     ASTfunction(ASTfunction<'a, 'b>),
     Include(Include<'a>),
@@ -161,37 +203,37 @@ pub enum Fragment<'a, 'b> {
     Union(Union<'a, 'b>),
     GlobalVariable(GlobalVariable<'a, 'b>),
 }
-pub fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Fragment<'a, 'b>> {
-    if tokens.peek().is_none() {
-        return (None);
+pub fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Fragment<'a, 'b>, ParseError<'a>> {
+    if tokens.peek().is_err() {
+        return Err(ParseError::EndOfFile);
     }
 
     if tokens.peek()? == "include" {
-        return Some(Fragment::Include(parse_include(tokens)?));
+        return Ok(Fragment::Include(parse_include(tokens)?));
     }
 
     let public = tokens.peek()? == "public";
     if tokens.peek()? == "public" { tokens.next(); }
 
     if tokens.peek()? == "const" {
-        return Some(Fragment::Constant(parse_constant(tokens, arena, public)?));
+        return Ok(Fragment::Constant(parse_constant(tokens, arena, public)?));
     }
     if tokens.peek()? == "struct" {
-        return Some(Fragment::Struct(parse_struct(tokens, arena, public)?));
+        return Ok(Fragment::Struct(parse_struct(tokens, arena, public)?));
     }
     if tokens.peek()? == "union" {
-        return Some(Fragment::Union(parse_union(tokens, arena, public)?));
+        return Ok(Fragment::Union(parse_union(tokens, arena, public)?));
     }
     if tokens.peek()? == "static" {
-        return Some(Fragment::GlobalVariable(parse_global_var(tokens, arena, public)?));
+        return Ok(Fragment::GlobalVariable(parse_global_var(tokens, arena, public)?));
     }
-    return Some(Fragment::ASTfunction(parse_function(tokens, arena, public)?));
+    return Ok(Fragment::ASTfunction(parse_function(tokens, arena, public)?));
 }
-fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<GlobalVariable<'a, 'b>> {
-    if tokens.next()? != "static" { return None; }
+fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<GlobalVariable<'a, 'b>, ParseError<'a>> {
+    tokens.expect_keyword("static")?;
     
     let typ = parse_type(tokens, arena)?;
-    let name = tokens.next()?;
+    let name = tokens.next_identifier()?;
 
     let value = if tokens.next()? == "=" {
         tokens.next();
@@ -199,40 +241,38 @@ fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public
     }
     else { None };
 
-    if tokens.next()? != ";" { return None; }
-
-    return Some(GlobalVariable { public, name: name.as_bytes(), typ, value });
+    tokens.expect_symbol(";")?;
+    return Ok(GlobalVariable { public, name: name.as_bytes(), typ, value });
 }
-fn parse_include<'a>(tokens: &mut Tokenizer<'a>) -> Option<Include<'a>> {
-    if tokens.next()? != "include" { return None; }
-    let path = tokens.until_semicolon()?;
+fn parse_include<'a>(tokens: &mut Tokenizer<'a>) -> Result<Include<'a>, ParseError<'a>> {
+    tokens.expect_keyword("include")?;
+    let path = tokens.until_semicolon().ok_or(ParseError::symbol(";", tokens))?;
 
-    Some(Include{ path: path.as_bytes() })
+    Ok(Include{ path: path.as_bytes() })
 }
-fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<ASTfunction<'a, 'b>> {
+fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<ASTfunction<'a, 'b>, ParseError<'a>> {
     let return_type = if tokens.peek()? != "void" {
         Some(parse_type(tokens, &arena)?)
     }
     else { None };
 
-    let name = tokens.next()?;
+    let name = tokens.next_identifier()?;
 
-    if tokens.next()? != "(" { return None; }
+    tokens.expect_symbol("(")?;
     let mut parameters = arena.vec_capacity(16);
 
     while tokens.peek()? != ")" {
         let t = parse_type(tokens, &arena)?;
-        let name = tokens.next()?.as_bytes();
+        let name = tokens.next_identifier()?.as_bytes();
 
         parameters.push((t, name));
         if tokens.peek()? == "," { tokens.next(); }
     }
-
-    if tokens.next()? != ")" { return None; }
+    tokens.expect_symbol(")")?;
     
     let body = parse_body(tokens, arena)?;
 
-    return Some(ASTfunction{ 
+    return Ok(ASTfunction{ 
         public,
         return_type, 
         name: name.as_bytes(), 
@@ -240,37 +280,39 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
         body
     });
 }
-fn parse_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Type<'a, 'b>> {
+fn parse_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Type<'a, 'b>, ParseError<'a>> {
     if tokens.peek()? == "*" {
         tokens.next()?;
-        return Some(Type::Pointer(arena.alloc(parse_type(tokens, arena)?)));
+        return Ok(Type::Pointer(arena.alloc(parse_type(tokens, arena)?)));
     }
     if tokens.peek()? == "[" {
         tokens.next()?;
         let t = arena.alloc(parse_type(tokens, arena)?);
         
-        if tokens.next()? != ";" { return None; }
+        tokens.expect_symbol(";")?;
         let len = parse_expression(tokens, arena)?;
-        if tokens.next()? != "]" { return None; }
+        tokens.expect_symbol("]")?;
 
-        return Some(Type::Array(t, len));
+        return Ok(Type::Array(t, len));
     }
-    return Some(Type::Name(tokens.next()?.as_bytes()));
+    return Ok(Type::Name(tokens.next_identifier()?.as_bytes()));
 }
-fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Expression<'a, 'b>> {
+fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Expression<'a, 'b>, ParseError<'a>> {
     let mut bracket_depth = 0;
     let e = parse_binary_expression(tokens, arena, 0, &mut bracket_depth)?;
     if bracket_depth != 0 {
-        return None;
+        return Err(ParseError::UnclosedBrackets { line: tokens.get_current_line() });
     }
-    Some(e)
+    Ok(e)
 }
-fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, min_precedence: i8, bracket_depth: &mut usize) -> Option<Expression<'a, 'b>> {
+fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, min_precedence: i8, bracket_depth: &mut usize) -> Result<Expression<'a, 'b>, ParseError<'a>> {
 
     if b"!*&-~".contains(&tokens.peek()?.as_bytes()[0]) { 
         let prefix = tokens.next()?;
+        let op = token_to_unary_operator(prefix.as_bytes())
+            .ok_or(ParseError::ExpectedOperator { found: tokens.last(), line: tokens.get_current_line() })?;
         let e = parse_binary_expression(tokens, arena, min_precedence, bracket_depth)?;
-        return Some(Expression::UnaryOperator { operator: token_to_unary_operator(tokens.next()?.as_bytes())?, expr: arena.alloc(e) });
+        return Ok(Expression::UnaryOperator { operator: op, expr: arena.alloc(e) });
     }
 
     let mut left = if tokens.peek()? == "(" {
@@ -282,7 +324,7 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
         parse_primary(tokens, arena)?
     };
 
-    while let Some(op_token) = tokens.peek() {
+    while let Ok(op_token) = tokens.peek() {
         let precedence = get_operator_precedence(op_token.as_bytes());
         if precedence < min_precedence {
             break;
@@ -299,7 +341,7 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
             let e = parse_binary_expression(tokens, arena, precedence + 1, bracket_depth)?;
 
             left = Expression::BinaryOperator {
-                operator: token_to_binary_operator(operator.as_bytes())?,
+                operator: token_to_binary_operator(operator.as_bytes()).ok_or(ParseError::ExpectedOperator { found: tokens.last(), line: tokens.get_current_line() })?,
                 left: arena.alloc(left),
                 right: arena.alloc(e),
             };
@@ -308,14 +350,13 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
 
     if tokens.peek()? == ")" {
         if *bracket_depth == 0 {
-            return None;
+            return Err(ParseError::UnOpenedBrackets { line: tokens.get_current_line() });
         }
         tokens.next();
         *bracket_depth -= 1;
-        return Some(left);
+        return Ok(left);
     }
-
-    Some(left)
+    Ok(left)
 }
 fn token_to_binary_operator(token: &[u8]) -> Option<ASTbinaryOperator> {
     Some(match token {
@@ -354,7 +395,7 @@ fn token_to_unary_operator(token: &[u8]) -> Option<ASTunaryOperator> {
         _ => return None,
     })
 }
-fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Expression<'a, 'b>> {
+fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Expression<'a, 'b>, ParseError<'a>> {
     if tokens.peek()? == "[" {
         tokens.next();
         let mut parameters = arena.vec_capacity(16);
@@ -363,25 +404,25 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
             parameters.push(parse_expression(tokens, &arena)?);
             if tokens.peek()? == "," { tokens.next(); }
         }
-        if tokens.next()? != "]" { return None; }
+        tokens.expect_symbol("]")?;
 
-        return Some(Expression::ArrayInit(parameters.array()));
+        return Ok(Expression::ArrayInit(parameters.array()));
     }
     if tokens.peek()? == "{" {
         tokens.next();
         let mut fields = arena.vec_capacity(16);
 
         while tokens.peek()? != "}" {
-            let name = tokens.next()?;
-            if tokens.next()? != ":" { return None; }
+            let name = tokens.next_identifier()?;
+            tokens.expect_symbol(":")?;
             let value = parse_expression(tokens, &arena)?;
 
             fields.push((name.as_bytes(), value));
             if tokens.peek()? == "," { tokens.next(); }
         }
-        if tokens.next()? != "}" { return None; }
+        tokens.expect_symbol("}")?;
 
-        return Some(Expression::StructInit(fields.array()));
+        return Ok(Expression::StructInit(fields.array()));
     }
     if let Ok(val) = str::from_utf8(tokens.peek()?.as_bytes()).unwrap().parse::<i64>() {
         let checkpoint = tokens.checkpoint();
@@ -391,24 +432,23 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
             tokens.restore(checkpoint);
 
             if let Ok(valf) = str::from_utf8(tokens.combine(3)?.as_bytes()).unwrap().parse::<f64>() {
-                return Some(Expression::Float(valf));
+                return Ok(Expression::Float(valf));
             }
         }
         else {
-            return Some(Expression::Integer(val));
+            return Ok(Expression::Integer(val));
         }
     }
     if tokens.peek()? == "true" {
         tokens.next();
-        return Some(Expression::Bool(true));
+        return Ok(Expression::Bool(true));
     }
     if tokens.peek()? == "false" {
         tokens.next();
-        return Some(Expression::Bool(false));
+        return Ok(Expression::Bool(false));
     }
 
-    tokens.next();
-    let mut expr = Expression::Name(tokens.peek()?.as_bytes());
+    let mut expr = Expression::Name(tokens.next_identifier()?.as_bytes());
 
     loop {
         if tokens.peek()? == "(" {
@@ -437,7 +477,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
         else if tokens.peek()? == "[" {
             tokens.next();
             let index = parse_expression(tokens, arena)?;
-            if tokens.next()? != "]" { return None; }
+            tokens.expect_symbol("]")?;
 
             expr = Expression::BinaryOperator { 
                 operator: ASTbinaryOperator::Index, 
@@ -449,7 +489,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option
             break;
         }
     }
-    Some(expr)
+    Ok(expr)
 }
 fn get_operator_precedence(op: &[u8]) -> i8 {
     match op {
@@ -467,18 +507,18 @@ fn get_operator_precedence(op: &[u8]) -> i8 {
         _ => -1,
     }
 }
-fn parse_body<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<&'b [Statement<'a, 'b>]> {
-    if tokens.next()? != "{" { return None; }
-    let mut statements = arena.vec_capacity(64);
+fn parse_body<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<&'b [Statement<'a, 'b>], ParseError<'a>> {
+    tokens.expect_symbol("{")?;
+    let mut statements = arena.vec_capacity(16);
 
     while tokens.peek()? != "}" {
         statements.push(parse_statement(tokens, &arena)?);
     }
-    if tokens.next()? != "}" { return None; }
+    tokens.expect_symbol("}")?;
 
-    Some(statements.array())
+    Ok(statements.array())
 }
-fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Statement<'a, 'b>> {
+fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Statement<'a, 'b>, ParseError<'a>> {
     if tokens.peek()? == "return" {
         tokens.next();
 
@@ -488,17 +528,17 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         else { None };
         tokens.next();
 
-        return Some(Statement::Return { value });
+        return Ok(Statement::Return { value });
     }
     if tokens.peek()? == "break" {
         tokens.next();
-        if tokens.next()? != ";" { return None; }
-        return Some(Statement::Break);
+        tokens.expect_symbol(";")?;
+        return Ok(Statement::Break);
     }
     if tokens.peek()? == "continue" {
         tokens.next();
-        if tokens.next()? != ";" { return None; }
-        return Some(Statement::Continue);
+        if tokens.next()? != ";" { panic!(); }
+        return Ok(Statement::Continue);
     }
     if tokens.peek()? == "while" {
         tokens.next();
@@ -506,7 +546,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         let condition = parse_expression(tokens, arena)?;
         let body = parse_body(tokens, arena)?;
 
-        return Some(Statement::While { condition, body });
+        return Ok(Statement::While { condition, body });
     }
     if tokens.peek()? == "if" {
         tokens.next();
@@ -520,11 +560,11 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         }
         else { None };
 
-        return Some(Statement::If { condition, body, else_body });
+        return Ok(Statement::If { condition, body, else_body });
     }
     if tokens.peek()? == "for" {
         tokens.next();
-        if tokens.peek()? != "(" { tokens.next()?; }
+        tokens.expect_symbol("(")?;
 
         let declaration = if tokens.peek()? != ";" {
             let d = parse_declaration(tokens, arena)?;
@@ -538,7 +578,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         }
         else { None };
 
-        if tokens.next()? != ";" { return None; }
+        tokens.expect_symbol(";")?;
 
         let iteration = if tokens.peek()? != ";" {
             let a = parse_assignment(tokens, arena)?;
@@ -547,54 +587,54 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opti
         }
         else { None };
 
-        if tokens.peek()? != ")" { tokens.next()?; }
+        tokens.expect_symbol(")")?;
 
         let body = parse_body(tokens, arena)?;
 
-        return Some(Statement::For { declaration, condition, iteration, body });
+        return Ok(Statement::For { declaration, condition, iteration, body });
     }
     if tokens.peek()? == "do" {
-        tokens.next()?;
+        tokens.next();
         let body = parse_body(tokens, arena)?;
 
-        if tokens.next()? != "while" { return None; }
+        tokens.expect_keyword("while")?;
         let condition = parse_expression(tokens, arena)?;
-        if tokens.next()? != ";" { return None; }
+        tokens.expect_symbol(";")?;
 
-        return Some(Statement::DoWhile { body, condition })
+        return Ok(Statement::DoWhile { body, condition })
     }
     
     let cp = tokens.checkpoint();
-    if let Some(a) = parse_assignment(tokens, arena) {
-        return Some(a);
+    if let Ok(a) = parse_assignment(tokens, arena) {
+        return Ok(a);
     }
     tokens.restore(cp);
     
     let d = parse_declaration(tokens, arena)?;
-    return Some(Statement::Declaration { typ: d.1, name: d.0, value: d.2 });
+    return Ok(Statement::Declaration { typ: d.1, name: d.0, value: d.2 });
 }
-fn parse_struct<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Struct<'a, 'b>> {
-    if tokens.next()? != "struct" { return None; }
+fn parse_struct<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<Struct<'a, 'b>, ParseError<'a>> {
+    tokens.expect_keyword("struct")?;
 
-    let name = tokens.next()?;
+    let name = tokens.next_identifier()?;
 
     let fields = parse_composite_type(tokens, arena)?;
 
-    return Some(Struct { public, name: name.as_bytes(), fields });
+    return Ok(Struct { public, name: name.as_bytes(), fields });
 }
-fn parse_union<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Union<'a, 'b>> {
-    if tokens.next()? != "union" { return None; }
+fn parse_union<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<Union<'a, 'b>, ParseError<'a>> {
+    tokens.expect_keyword("union")?;
 
-    let name = tokens.next()?;
+    let name = tokens.next_identifier()?;
 
     let fields = parse_composite_type(tokens, arena)?;
 
-    return Some(Union { public, name: name.as_bytes(), fields });
+    return Ok(Union { public, name: name.as_bytes(), fields });
 }
-fn parse_composite_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<&'b [(Type<'a, 'b>, &'a [u8])]> {
-    let name = tokens.next()?;
+fn parse_composite_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<&'b [(Type<'a, 'b>, &'a [u8])], ParseError<'a>> {
+    let name = tokens.next_identifier()?;
 
-    if tokens.next()? != "{" { return None; }
+    tokens.expect_symbol("{");
 
     let mut fields = arena.vec_capacity(16);
 
@@ -604,39 +644,35 @@ fn parse_composite_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) ->
         }
 
         let t = parse_type(tokens, arena)?;
-        let name = tokens.next()?;
+        let name = tokens.next_identifier()?;
         
         fields.push((t, name.as_bytes()));
     }
+    tokens.expect_symbol("}")?;
 
-    if tokens.next()? != "}" { return None; }
-
-    return Some(fields.array());
+    return Ok(fields.array());
 }
-fn parse_constant<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Option<Constant<'a, 'b>> {
-    if tokens.next()? != "const" { return None; }
+fn parse_constant<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<Constant<'a, 'b>, ParseError<'a>> {
+    tokens.expect_keyword("const")?;
 
     let decl = parse_declaration(tokens, arena)?;
     
-    return Some(Constant { public, name: decl.0, typ: decl.1, value: decl.2? });
+    return Ok(Constant { public, name: decl.0, typ: decl.1, value: decl.2.unwrap() });
 }
-fn parse_declaration<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<(&'a [u8], Type<'a, 'b>, Option<Expression<'a, 'b>>)> {
-
+fn parse_declaration<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<(&'a [u8], Type<'a, 'b>, Option<Expression<'a, 'b>>), ParseError<'a>> {
     let t = parse_type(tokens, arena)?;
-
-    let name = tokens.next()?;
+    let name = tokens.next_identifier()?;
 
     let value = if tokens.peek()? != ";" {
-        if tokens.next()? != "=" { return None; }
+        tokens.expect_symbol("=")?;
         Some(parse_expression(tokens, arena)?)
     }
     else { None };
-
-    if tokens.next()? != ";" { return None; }
+    tokens.expect_symbol(";")?;
     
-    Some((name.as_bytes(), t, value))
+    Ok((name.as_bytes(), t, value))
 }
-fn parse_assignment<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Option<Statement<'a, 'b>> {
+fn parse_assignment<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Statement<'a, 'b>, ParseError<'a>> {
     let first = parse_expression(tokens, arena)?;
 
     let (destination, value) = if tokens.peek()? != ";" {
@@ -644,16 +680,14 @@ fn parse_assignment<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Opt
         let mut expr = parse_expression(tokens, arena)?;
 
         if op != "=" {
-            let operator = token_to_binary_operator(&op.as_bytes().split_last()?.1)?;
+            let operator = token_to_binary_operator(&op.as_bytes().split_last().unwrap().1)
+                .ok_or(ParseError::ExpectedOperator { found: tokens.last(), line: tokens.get_current_line() })?;
             expr = Expression::BinaryOperator { operator, left: arena.alloc(first.clone()), right: arena.alloc(expr) };
         }
         (Some(first), expr)
     }
-    else {
-        (None, first)
-    };
+    else { (None, first) };
 
-    if tokens.next()? != ";" { return None; }
-
-    Some(Statement::Assignment { destination, value })
+    tokens.expect_symbol(";")?;
+    Ok(Statement::Assignment { destination, value })
 }

@@ -1,5 +1,5 @@
 bool exprs(f32 f, i64 i) {
-    let c: f32 = f * (f / (1 as f32) + i as f32);
-    let d: i64 = (f + 4 as f32 + i as f32) as i64 ^ 3 | 13;
+    f32 c = f * (f / (1 as f32) + i as f32);
+    i64 d = (f + 4 as f32 + i as f32) as i64 ^ 3 | 13;
     return c == (d as f32);
 }

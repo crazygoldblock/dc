@@ -1,4 +1,4 @@
 i64 test1(i64 a, i64 b) {
-    let c: i64 = 1 + b + a - 4 * 6;
+    i64 c = 1 + b + a - 4 * 6;
     return c;
 }
