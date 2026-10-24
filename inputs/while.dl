@@ -1,5 +1,5 @@
-i64 test1(i64 a) {
-    i64 sum = 0;
+i32 test1(i32 a) {
+    i32 sum = 0;
     while a > 0 {
         sum += a;
         a -= 1;

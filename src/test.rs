@@ -41,13 +41,13 @@ fn check_ast_and_ir() {
                     if exists(format!("{}.ast", output_path)).unwrap() {
                         let ast_file = read_to_string(format!("{}.ast", output_path)).unwrap();
                         if ast_file != format!("{}", ast) {
-                            panic!("AST comparison failed! FUNCTION: \n{}\nPATH: {}, OLD: \n{}\nNEW: \n{}\n", file, path.to_str().unwrap(), ast_file, ast);
+                            panic!("AST comparison failed! FUNCTION: \n{}\nPATH: {}, \n\nOLD: \n{}\n\nNEW: \n{}\n", file, path.to_str().unwrap(), ast_file, ast);
                         }
                     }
                     if exists(format!("{}.ir", output_path)).unwrap() {
                         let ir_file = read_to_string(format!("{}.ir", output_path)).unwrap();
                         if ir_file != format!("{}", ir) {
-                            panic!("IR comparison failed! FUNCTION: \n{}\nPATH: {}, OLD: \n{}\nNEW: \n{}\n", file, path.to_str().unwrap(), ir_file, ir);
+                            panic!("IR comparison failed! FUNCTION: \n{}\nPATH: {}, \n\nOLD: \n{}\n\nNEW: \n{}\n", file, path.to_str().unwrap(), ir_file, ir);
                         }
                     }
                     

@@ -39,13 +39,9 @@ impl<'a> Tokenizer<'a> {
         Tokenizer { buffer: input, state: State::Start, index: 0, last: &[] }
     }
     pub fn peek(&mut self) -> Result<Token<'a>, ParseError<'a>> {
-        let state = self.state.clone();
-        let index = self.index;
-
+        let cp = self.checkpoint();
         let token = self.next();
-
-        self.state = state;
-        self.index = index;
+        self.restore(cp);
 
         return token;
     }
@@ -138,16 +134,7 @@ impl<'a> Tokenizer<'a> {
 
         while self.next().ok()? != ";" {}
 
-       return Some(Token{ token: &self.buffer[index..self.index]});
-    }
-    pub fn combine(&mut self, len: usize) -> Result<Token<'a>, ParseError<'a>> {
-        let index = self.index;
-
-        for _ in 0..len {
-            self.next()?;
-        }
-
-        return Ok(Token{ token: &self.buffer[index..self.index]});
+        return Some(Token{ token: &self.buffer[index..self.index]});
     }
     pub fn checkpoint(&self) -> Checkpoint {
         Checkpoint { state: self.state.clone(), index: self.index }
@@ -179,33 +166,5 @@ impl<'a> Tokenizer<'a> {
     pub fn last(&self) -> &'a str {
         str::from_utf8(self.last).unwrap()
     }
-    pub fn expect_symbol(&mut self, expected: &'static str) -> Result<(), ParseError<'a>> {
-        let token = self.next()?;
-        if token == expected {
-            Ok(())
-        }
-        else {
-            Err(ParseError::ExpectedSymbol { expected, found: token.as_str(), line: self.get_current_line() })
-        }
-    }
-    pub fn expect_keyword(&mut self, expected: &'static str) -> Result<(), ParseError<'a>> {
-        let token = self.next()?;
-        if token == expected {
-            Ok(())
-        }
-        else {
-            Err(ParseError::ExpectedKeyword { expected, found: token.as_str(), line: self.get_current_line() })
-        }
-    }
-    pub fn next_identifier(&mut self) -> Result<Token<'a>, ParseError<'a>> {
-
-        let token = self.next()?;
-
-        if !token.as_bytes()[0].is_ascii_alphabetic() {
-            return Err(ParseError::ExpectedIdentifier { found: token.as_str(), line: self.get_current_line() });
-        }
-        else {
-            Ok(token)
-        }
-    }
+    
 }

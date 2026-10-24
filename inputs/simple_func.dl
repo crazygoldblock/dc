@@ -1,4 +1,4 @@
-i64 test1(i64 a, i64 b) {
-    i64 c = 1 + b + a - 4 * 6;
+i32 test1(i32 a, i32 b) {
+    i32 c = 1 + b + a - 4 * 6;
     return c;
 }
