@@ -8,8 +8,14 @@ use crate::{arena::Arena, lexer::Tokenizer};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Expression<'a, 'b> {
-    Integer(i64),
-    Float(f64),
+    Integer{
+        typ: &'static str,
+        value: u64,
+    },
+    Float{
+        typ: &'static str,
+        value: f64,
+    },
     Bool(bool),
     Name(&'a [u8]),
     Call{
@@ -180,6 +186,12 @@ pub enum ParseError<'a> {
         line: &'a str,
     },
     UnOpenedBrackets{
+        line: &'a str,
+    },
+    ExpectedConstValue{
+        line: &'a str,
+    },
+    ExpectedNumberLiteral{
         line: &'a str,
     },
 }
@@ -424,20 +436,18 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result
 
         return Ok(Expression::StructInit(fields.array()));
     }
-    if let Ok(val) = str::from_utf8(tokens.peek()?.as_bytes()).unwrap().parse::<i64>() {
-        let checkpoint = tokens.checkpoint();
-        tokens.next();
-
-        if tokens.peek()? == "." {
-            tokens.restore(checkpoint);
-
-            if let Ok(valf) = str::from_utf8(tokens.combine(3)?.as_bytes()).unwrap().parse::<f64>() {
-                return Ok(Expression::Float(valf));
-            }
+    if tokens.peek()?.as_bytes()[0].is_ascii_digit() {
+        let cp = tokens.checkpoint();
+        if let Some(i) = parse_integer(tokens) {
+            tokens.next();
+            return Ok(Expression::Integer { typ: i.1, value: i.0 });
         }
-        else {
-            return Ok(Expression::Integer(val));
+        tokens.restore(cp);
+        if let Some(f) = parse_float(tokens) {
+            tokens.next();
+            return Ok(Expression::Float { typ: f.1, value: f.0 });
         }
+        return Err(ParseError::ExpectedNumberLiteral { line: tokens.get_current_line() });
     }
     if tokens.peek()? == "true" {
         tokens.next();
@@ -490,6 +500,92 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result
         }
     }
     Ok(expr)
+}
+fn parse_integer(tokens: &mut Tokenizer) -> Option<(u64, &'static str)> {
+    fn check(value: i128, signed: bool, max: i128) -> Option<i128> {
+        if signed {
+            if value > max/2 || value < -(max/2+1) {
+                return None;
+            }
+            return Some(value);
+        }
+        if value > max {
+            return None;
+        }
+        return Some(value);
+    }
+
+    let mut first = tokens.next().ok()?;
+
+    let mut result = 0i128;
+
+    let sign = if first == "-" { -1 } else { 1 }; 
+    if first == "-" { first = tokens.next().ok()?; }
+
+    let input = first.as_bytes();
+
+    for i in 0..input.len() {
+        if input[i] == b'_' { continue; }
+
+        if !input[i].is_ascii_digit() {
+            result *= sign;
+            match &input[i..] {
+                b"i8" => return Some((check(result, true, u8::MAX as i128)? as u64, "i8")),
+                b"i16" => return Some((check(result, true, u16::MAX as i128)? as u64, "i16")),
+                b"i32" => return Some((check(result, true, u32::MAX as i128)? as u64, "i32")),
+                b"i64" => return Some((check(result, true, u64::MAX as i128)? as u64, "i64")),
+
+                b"u8" => return Some((check(result, false, u8::MAX as i128)? as u64, "u8")),
+                b"u16" => return Some((check(result, false, u16::MAX as i128)? as u64, "u16")),
+                b"u32" => return Some((check(result, false, u32::MAX as i128)? as u64, "u32")),
+                b"u64" => return Some((check(result, false, u64::MAX as i128)? as u64, "u64")),
+                _ => return None,
+            }
+        }
+        result += (input[i] - b'0') as i128;
+        result *= 10;
+    }
+    result *= sign;
+    return Some((check(result, true, u32::MAX as i128)? as u64, "i32"));
+}
+fn parse_float(tokens: &mut Tokenizer) -> Option<(f64, &'static str)> {
+    let mut first = tokens.next().ok()?;
+    
+
+    let sign = if first == "-" { -1.0 } else { 1.0 }; 
+    if first == "-" { first = tokens.next().ok()?; }
+
+    let input_left = first.as_bytes();
+    let mut result = 0f64;
+    for i in 0..input_left.len() {
+        if input_left[i] == b'_' { continue; }
+
+        if !input_left[i].is_ascii_digit() {
+            return None;
+        }
+        result += (input_left[i] - b'0') as f64;
+        result *= 10.0;
+    }
+
+    tokens.expect_symbol(".").ok()?;
+
+    let input_right = first.as_bytes();
+    let mut right = 0f64;
+    for i in 0..input_right.len() {
+        if input_right[i] == b'_' { continue; }
+
+        if !input_right[i].is_ascii_digit() {
+            result *= sign;
+            match &input_right[i..] {
+                b"f32" => return Some((result, "f32")),
+                b"f64" => return Some((result, "f64")),
+                _ => return None,
+            }
+        }
+        result += ((input_right[i] - b'0') as f64) * (0.1f64).powi(i as i32 +1);
+    }
+    result *= sign;
+    return Some((result, "f32"));
 }
 fn get_operator_precedence(op: &[u8]) -> i8 {
     match op {
@@ -656,8 +752,9 @@ fn parse_constant<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
     tokens.expect_keyword("const")?;
 
     let decl = parse_declaration(tokens, arena)?;
-    
-    return Ok(Constant { public, name: decl.0, typ: decl.1, value: decl.2.unwrap() });
+    let value = decl.2.ok_or(ParseError::ExpectedConstValue { line: tokens.get_current_line() })?;
+
+    return Ok(Constant { public, name: decl.0, typ: decl.1, value });
 }
 fn parse_declaration<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<(&'a [u8], Type<'a, 'b>, Option<Expression<'a, 'b>>), ParseError<'a>> {
     let t = parse_type(tokens, arena)?;
@@ -680,7 +777,7 @@ fn parse_assignment<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Res
         let mut expr = parse_expression(tokens, arena)?;
 
         if op != "=" {
-            let operator = token_to_binary_operator(&op.as_bytes().split_last().unwrap().1)
+            let operator = token_to_binary_operator(&op.as_bytes().split_last().expect("Lexer doesnt return empty tokens").1)
                 .ok_or(ParseError::ExpectedOperator { found: tokens.last(), line: tokens.get_current_line() })?;
             expr = Expression::BinaryOperator { operator, left: arena.alloc(first.clone()), right: arena.alloc(expr) };
         }

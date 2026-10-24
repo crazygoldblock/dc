@@ -21,7 +21,7 @@ pub enum Instruction<'a, 'b> {
     NoOperation,
     Immediate{
         destination: u16,
-        value: i64,
+        value: u64,
     },
     ImmediateFloat{
         destination: u16,
@@ -284,19 +284,19 @@ fn lower_expression<'a, 'b>(
 ) -> Option<u16> {
 
     match expression {
-        Expression::Integer(i) => {
-            registers.push(RegisterType::I64);
-            instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: *i });
+        Expression::Integer{ typ, value } => {
+            registers.push(RegisterType::from_str(typ.as_bytes()).unwrap());
+            instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: *value });
             return Some(registers.len() as u16 - 1);
         },
-        Expression::Float(f) => {
-            registers.push(RegisterType::F64);
-            instructions.push(Instruction::ImmediateFloat { destination: registers.len() as u16 - 1, value: *f });
+        Expression::Float{ typ, value} => {
+            registers.push(RegisterType::from_str(typ.as_bytes())?);
+            instructions.push(Instruction::ImmediateFloat { destination: registers.len() as u16 - 1, value: *value });
             return Some(registers.len() as u16 - 1);
         },
         Expression::Bool(b) => {
             registers.push(RegisterType::Bool);
-            instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: *b as i64 });
+            instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: *b as u64 });
             return Some(registers.len() as u16 - 1);
         },
         Expression::Name(n) => {
@@ -544,7 +544,7 @@ fn lower_expression<'a, 'b>(
                     } 
                     let size = t.size();
                     registers.push(t);
-                    instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: 1i64.wrapping_shl(size as u32)-1 });
+                    instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: 1u64.wrapping_shl(size as u32)-1 });
                     instructions.push(Instruction::BinaryOperation { 
                         size: size, 
                         operation: IRbinaryOperator::Xor, 
