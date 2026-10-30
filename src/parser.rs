@@ -2,7 +2,7 @@
 
 use std::ops::DerefMut;
 
-use crate::{arena::Arena, lexer::Tokenizer};
+use crate::{arena::Arena, lexer::{TokenError, Tokenizer}};
 
 // enum, switch+case+default, string literal
 
@@ -195,6 +195,13 @@ pub enum ParseError<'a> {
         line: &'a str,
     },
 }
+impl<'a> From<TokenError<'a>> for ParseError<'a> {
+    fn from(value: TokenError<'a>) -> Self {
+        match value {
+            TokenError::EndOfFile(l) => ParseError::UnexpectedEndOfFile { line: l },
+        }
+    }
+}
 impl<'a> ParseError<'a> {
     pub fn keyword(expected: &'static str, tokens: &mut Tokenizer<'a>) -> ParseError<'a> {
         ParseError::ExpectedKeyword { expected, found: tokens.last(), line: tokens.get_current_line() }
@@ -258,9 +265,11 @@ fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public
 }
 fn parse_include<'a>(tokens: &mut Tokenizer<'a>) -> Result<Include<'a>, ParseError<'a>> {
     expect_keyword(tokens, "include")?;
-    let path = tokens.until_semicolon().ok_or(ParseError::symbol(";", tokens))?;
+    let index = tokens.index();
+    while tokens.next()? != ";" {}
 
-    Ok(Include{ path: path.as_bytes() })
+    let path = &tokens.buffer()[index..tokens.index()];
+    Ok(Include{ path: path })
 }
 fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<ASTfunction<'a, 'b>, ParseError<'a>> {
     let return_type = if tokens.peek()? != "void" {
@@ -550,7 +559,6 @@ fn parse_integer(tokens: &mut Tokenizer) -> Option<(u64, &'static str)> {
 fn parse_float(tokens: &mut Tokenizer) -> Option<(f64, &'static str)> {
     let mut first = tokens.next().ok()?;
     
-
     let sign = if first == "-" { -1.0 } else { 1.0 }; 
     if first == "-" { first = tokens.next().ok()?; }
 
@@ -568,8 +576,7 @@ fn parse_float(tokens: &mut Tokenizer) -> Option<(f64, &'static str)> {
 
     expect_symbol(tokens, ".").ok()?;
 
-    let input_right = first.as_bytes();
-    let mut right = 0f64;
+    let input_right = tokens.next().ok()?.as_bytes();
     for i in 0..input_right.len() {
         if input_right[i] == b'_' { continue; }
 

@@ -624,7 +624,7 @@ fn lower_expression<'a, 'b>(
                 });
             }
             else if left_t.is_float() && cast_type == RegisterType::Bool {
-                registers.push( if left_t.size() == 32 { RegisterType::F32 } else { RegisterType::F64 } );
+                registers.push(left_t.clone());
                 instructions.push(Instruction::ImmediateFloat { destination: registers.len() as u16 - 1, value: 0.0 });
                 registers.push(RegisterType::Bool);
 
@@ -794,9 +794,7 @@ fn lower_statement<'a, 'b>(
                 lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), last_loop_start).unwrap();
             }
 
-            while variables.len() > var_len {
-                variables.pop();
-            }
+            variables.truncate(var_len);
 
             let next_index = blocks.len();
 

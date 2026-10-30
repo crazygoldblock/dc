@@ -1,5 +1,3 @@
-use crate::parser::ParseError;
-
 pub struct Tokenizer<'a> {
     buffer: &'a [u8],
     state: State,
@@ -23,29 +21,33 @@ impl<'a> PartialEq<&str> for Token<'a> {
         self.token == other.as_bytes()
     }
 }
-pub struct Checkpoint {
+pub enum TokenError<'a> {
+    EndOfFile(&'a str),
+}
+pub struct Checkpoint<'a> {
     state: State,
     index: usize,
+    last: &'a [u8],
 }
 #[derive(Clone)]
 enum State {
     Start,
     LineComment,
-    BlockComment,
+    BlockComment{ depth: usize },
     Name{start: usize},
 }
 impl<'a> Tokenizer<'a> {
     pub fn new<'b>(input: &'b [u8]) -> Tokenizer<'b> {
         Tokenizer { buffer: input, state: State::Start, index: 0, last: &[] }
     }
-    pub fn peek(&mut self) -> Result<Token<'a>, ParseError<'a>> {
+    pub fn peek(&mut self) -> Result<Token<'a>, TokenError<'a>> {
         let cp = self.checkpoint();
         let token = self.next();
         self.restore(cp);
 
         return token;
     }
-    pub fn next(&mut self) -> Result<Token<'a>, ParseError<'a>> {
+    pub fn next(&mut self) -> Result<Token<'a>, TokenError<'a>> {
         loop {
             if self.index == self.buffer.len() {
                 break;
@@ -66,7 +68,7 @@ impl<'a> Tokenizer<'a> {
                     }
                     if current == b'/' && next.is_some_and(|x| *x == b'*') {
                         self.index += 2;
-                        self.state = State::BlockComment;
+                        self.state = State::BlockComment{ depth: 0 };
                         continue;
                     }
                     if b"*/:=;->(){},#[]+-.".contains(&current) {
@@ -102,10 +104,19 @@ impl<'a> Tokenizer<'a> {
                     }
                     self.index += 1;
                 },
-                State::BlockComment => {
+                State::BlockComment{ depth } => {
+                    if current == b'/' && next.is_some_and(|x| *x == b'*') {
+                        self.index += 1;
+                        self.state = State::BlockComment{ depth: depth+1 };
+                    }
                     if current == b'*' && next.is_some_and(|x| *x == b'/') {
                         self.index += 1;
-                        self.state = State::Start;
+                        if depth == 0 {
+                            self.state = State::Start;
+                        }
+                        else {
+                            self.state = State::BlockComment{ depth: depth-1 };
+                        }
                     }
                     self.index += 1;
                 },
@@ -121,7 +132,7 @@ impl<'a> Tokenizer<'a> {
         }
 
         match self.state {
-            State::Start | State::BlockComment | State::LineComment => return Err(ParseError::UnexpectedEndOfFile { line: self.get_current_line() }),
+            State::Start | State::BlockComment{ depth: _ } | State::LineComment => return Err(TokenError::EndOfFile(self.get_current_line())),
             State::Name { start } => {
                 self.state = State::Start;
                 self.last = &self.buffer[start..self.index];
@@ -129,19 +140,20 @@ impl<'a> Tokenizer<'a> {
             },
         }
     }
-    pub fn until_semicolon(&mut self) -> Option<Token<'a>> {
-        let index = self.index;
-
-        while self.next().ok()? != ";" {}
-
-        return Some(Token{ token: &self.buffer[index..self.index]});
+    pub fn checkpoint(&self) -> Checkpoint<'a> {
+        Checkpoint { 
+            state: self.state.clone(), 
+            index: self.index,
+            last: self.last, 
+        }
     }
-    pub fn checkpoint(&self) -> Checkpoint {
-        Checkpoint { state: self.state.clone(), index: self.index }
-    }
-    pub fn restore(&mut self, checkpoint: Checkpoint) {
-        self.state = checkpoint.state;
-        self.index = checkpoint.index;
+    pub fn restore(&mut self, checkpoint: Checkpoint<'a>) {
+        *self = Tokenizer { 
+            buffer: self.buffer, 
+            state: checkpoint.state, 
+            index: checkpoint.index, 
+            last: checkpoint.last 
+        }
     }
     pub fn rest(&self) -> &'a str {
         str::from_utf8(&self.buffer[self.index..]).unwrap()
@@ -166,5 +178,10 @@ impl<'a> Tokenizer<'a> {
     pub fn last(&self) -> &'a str {
         str::from_utf8(self.last).unwrap()
     }
-    
+    pub fn buffer(&self) -> &'a [u8] {
+        self.buffer
+    }
+    pub fn index(&self) -> usize {
+        self.index
+    }
 }
