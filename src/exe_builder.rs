@@ -8,7 +8,7 @@ fn test1() {
 }
 
 pub fn build() {
-    let mut builder = BinaryBuilder::with_capacity(1024);
+    let mut builder = BinaryBuilder::with_capacity(1024 + 512);
 
     // DOS header
     builder.push_u16_le(0x5A4D); // magic
@@ -19,7 +19,7 @@ pub fn build() {
     // PE header
     builder.push_u32_le(0x00_00_45_50); // magic
     builder.push_u16_le(0x8664); // machine
-    builder.push_u16_le(1); // number of sections
+    builder.push_u16_le(2); // number of sections
     builder.push_u32_le(0); // timestamp
     builder.push_u32_le(0); // pointer to symbol table
     builder.push_u32_le(0); // number of symbols
@@ -49,7 +49,7 @@ pub fn build() {
     builder.push_u16_le(6); // major subsystem version
     builder.push_u16_le(0); // minor subsystem version
     builder.push_u32_le(0); // Win32version value, must be zero
-    builder.push_u32_le(0x2000); // size of image
+    builder.push_u32_le(0x3000); // size of image
     builder.push_u32_le(0x200); // size of headers
     builder.push_u32_le(0); // checksum
     builder.push_u16_le(3); // subsystem
@@ -63,27 +63,26 @@ pub fn build() {
     assert_eq!(builder.len(), 64 + 24 + 112);
 
     // data directories
-    builder.push_u64_le(0); // export table
-    builder.push_u64_le(0); // import table
-    builder.push_u64_le(0); // resource table
-    builder.push_u64_le(0); // exception table
-    builder.push_u64_le(0); // certificate table 
-    builder.push_u64_le(0); // base relocation table
-    builder.push_u64_le(0); // debug
-    builder.push_u64_le(0); // architecture, must be zero
-    builder.push_u64_le(0); // global ptr
-    builder.push_u64_le(0); // thread local storage table
-    builder.push_u64_le(0); // load config table
-    builder.push_u64_le(0); // bound import table
-    builder.push_u64_le(0); // import address table
-    builder.push_u64_le(0); // delay import descriptor
-    builder.push_u64_le(0); // CLR runtime header
-    builder.push_u64_le(0); // must be zero
+    for i in 0..16 {
+        match i {
+            1 => {
+                // Import directory
+                builder.push_u32_le(0x2000);
+                builder.push_u32_le(40);
+            }
+            12 => {
+                // Import Address Table
+                builder.push_u32_le(0x2048);
+                builder.push_u32_le(32);
+            }
+            _ => builder.push_u64_le(0),
+        }
+    }
     assert_eq!(builder.len(), 64 + 24 + 240);
 
     // text section header
     builder.push_slice(b".text\0\0\0"); // name
-    builder.push_u32_le(2); // virtual size
+    builder.push_u32_le(0x50); // virtual size
     builder.push_u32_le(0x1000); // virtual address
     builder.push_u32_le(0x200); // size of raw data
     builder.push_u32_le(0x200); // pointer to raw data
@@ -94,16 +93,111 @@ pub fn build() {
     builder.push_u32_le(0x60000020); // characteristics
     assert_eq!(builder.len(), 64 + 24 + 240 + 40);
 
+    builder.push_slice(b".idata\0\0");
+    builder.push_u32_le(0xA0);        // VirtualSize
+    builder.push_u32_le(0x2000);      // VirtualAddress
+    builder.push_u32_le(0x200);       // SizeOfRawData
+    builder.push_u32_le(0x400);       // PointerToRawData
+    builder.push_u32_le(0);
+    builder.push_u32_le(0);
+    builder.push_u16_le(0);
+    builder.push_u16_le(0);
+    builder.push_u32_le(0xC0000040);  // Initialized data, read, write
+
     // alignment
-    builder.push_slice(&[0; 144]);
+    builder.push_slice(&[0; 104]);
     assert_eq!(builder.len(), 512);
 
-    // infinite loop instructions
-    builder.push_slice(&[0xEB, 0xFE]);
 
-    // alignment
-    builder.push_slice(&[0; 510]);
+    let code: [u8; 59] = [
+    // sub rsp, 38h
+    0x48, 0x83, 0xEC, 0x38,
+
+    // mov ecx, -11
+    0xB9, 0xF5, 0xFF, 0xFF, 0xFF,
+
+    // call [rip + 1039h] ; GetStdHandle IAT
+    0xFF, 0x15, 0x39, 0x10, 0x00, 0x00,
+
+    // mov rcx, rax
+    0x48, 0x89, 0xC1,
+
+    // lea rdx, [rip + 27h] ; message
+    0x48, 0x8D, 0x15, 0x27, 0x00, 0x00, 0x00,
+
+    // mov r8d, 16
+    0x41, 0xB8, 0x10, 0x00, 0x00, 0x00,
+
+    // lea r9, [rsp + 28h]
+    0x4C, 0x8D, 0x4C, 0x24, 0x28,
+
+    // mov qword ptr [rsp + 20h], 0
+    0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00,
+
+    // call [rip + 101Dh] ; WriteFile IAT
+    0xFF, 0x15, 0x1D, 0x10, 0x00, 0x00,
+
+    // xor ecx, ecx
+    0x31, 0xC9,
+
+    // call [rip + 101Dh] ; ExitProcess IAT
+    0xFF, 0x15, 0x1D, 0x10, 0x00, 0x00,
+    ];
+
+    builder.push_slice(&code);
+    builder.push_slice(&[0; 5]); // align message to 0x40
+    builder.push_slice(b"Hello from PE!\r\n");
+
+    builder.push_slice(&[0; 512-64-16]);
     assert_eq!(builder.len(), 1024);
+
+    // Import descriptor
+    builder.push_u32_le(0x2028); // OriginalFirstThunk
+    builder.push_u32_le(0);      // TimeDateStamp
+    builder.push_u32_le(0);      // ForwarderChain
+    builder.push_u32_le(0x2068); // Name
+    builder.push_u32_le(0x2048); // FirstThunk
+
+    // Null import descriptor
+    builder.push_slice(&[0; 20]);
+
+    // Import lookup table
+    builder.push_u64_le(0x2076);
+    builder.push_u64_le(0x2086);
+    builder.push_u64_le(0x2092);
+    builder.push_u64_le(0);
+
+    // Import address table
+    builder.push_u64_le(0x2076);
+    builder.push_u64_le(0x2086);
+    builder.push_u64_le(0x2092);
+    builder.push_u64_le(0);
+
+    // DLL name
+    builder.push_slice(b"KERNEL32.dll\0");
+
+    // Align to 2 bytes
+    builder.push_u8_le(0);
+
+    // GetStdHandle
+    builder.push_u16_le(0); // Hint
+    builder.push_slice(b"GetStdHandle\0");
+
+    // Align to 2 bytes
+    builder.push_u8_le(0);
+
+    // WriteFile
+    builder.push_u16_le(0);
+    builder.push_slice(b"WriteFile\0");
+
+    // ExitProcess
+    builder.push_u16_le(0);
+    builder.push_slice(b"ExitProcess\0");
+
+    // Pad section to 512 bytes
+    builder.push_slice(&[0; 0x200 - 0xA0]);
+
+    assert_eq!(builder.len(), 1024 + 512);
 
     write("./testexec.exe", builder.as_slice()).unwrap();
 }
@@ -127,7 +221,7 @@ impl BinaryBuilder {
         self.buffer.extend_from_slice(&value.to_le_bytes());
     }
     fn push_slice(&mut self, slice: &[u8]) {
-        self.buffer.extend_from_slice(slice);
+        self.buffer.extend(slice);
     }
     fn len(&self) -> usize {
         self.buffer.len()
