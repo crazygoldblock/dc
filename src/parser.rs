@@ -119,6 +119,11 @@ pub enum Statement<'a, 'b> {
         body: &'b [Statement<'a, 'b>],
         condition: Expression<'a, 'b>,
     },
+    Switch{
+        value: Expression<'a, 'b>,
+        arms: &'b [(Expression<'a, 'b>, &'b [Statement<'a, 'b>])],
+        default: Option<&'b [Statement<'a, 'b>]>,
+    },
 }
 #[derive(Debug)]
 pub struct ASTfunction<'a, 'b> {
@@ -705,6 +710,38 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Resu
         expect_symbol(tokens, ";")?;
 
         return Ok(Statement::DoWhile { body, condition })
+    }
+    if tokens.peek()? == "switch" {
+        tokens.next()?;
+        let value = parse_expression(tokens, arena)?;
+        let mut arms = arena.vec_capacity(8);
+        let mut default = None;
+        while tokens.peek()? != "}" {
+            if tokens.peek()? == "case" {
+                tokens.next();
+                let case = parse_expression(tokens, arena)?;
+                expect_symbol(tokens, ":")?;
+                let mut body = arena.vec_capacity(4);
+
+                while tokens.peek()? != "case" && tokens.peek()? != "}" {
+                    body.push(parse_statement(tokens, arena)?);
+                }
+                arms.push((case, body.array()));
+            }
+            else if tokens.peek()? == "default" {
+                tokens.next();
+                expect_symbol(tokens, ":")?;
+                let mut body = arena.vec_capacity(4);
+                while tokens.peek()? != "}" {
+                    body.push(parse_statement(tokens, arena)?);
+                }
+                default = Some(body.array());
+                break;
+            }
+            else { break; }
+        }
+        expect_symbol(tokens, "}")?;
+        return Ok(Statement::Switch { value, arms: arms.array(), default  })
     }
     
     let cp = tokens.checkpoint();

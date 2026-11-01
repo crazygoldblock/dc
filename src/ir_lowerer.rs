@@ -7,14 +7,14 @@ use crate::parser::{Expression, ASTfunction, Statement, Struct, Type, Union, AST
 
 #[derive(Debug)]
 pub struct IRfunction<'a, 'b> {
-    name: &'a [u8],
-    paramaters: &'b [RegisterType<'a, 'b>],
-    return_type: Option<RegisterType<'a, 'b>>,
-    blocks: &'b [Block<'a, 'b>],
+    pub name: &'a [u8],
+    pub paramaters: &'b [RegisterType<'a, 'b>],
+    pub return_type: Option<RegisterType<'a, 'b>>,
+    pub blocks: &'b [Block<'a, 'b>],
 }
 #[derive(Debug)]
 pub struct Block<'a, 'b> {
-    instructions: VecArena<'b, Instruction<'a, 'b>>,
+    pub instructions: VecArena<'b, Instruction<'a, 'b>>,
 }
 #[derive(Debug)]
 pub enum Instruction<'a, 'b> {
@@ -24,6 +24,7 @@ pub enum Instruction<'a, 'b> {
         value: u64,
     },
     ImmediateFloat{
+        typ: &'static str,
         destination: u16,
         value: f64,
     },
@@ -145,6 +146,61 @@ pub enum IRbinaryOperator {
     Fdiv,
     Frem,
 }
+impl IRbinaryOperator {
+    pub fn is_int(&self) -> bool {
+        match self {
+            IRbinaryOperator::Feq => false,
+            IRbinaryOperator::FnotEq => false,
+            IRbinaryOperator::Fgreater => false,
+            IRbinaryOperator::FgreaterEq => false,
+            IRbinaryOperator::Fless => false,
+            IRbinaryOperator::FlessEq => false,
+            IRbinaryOperator::Fadd => false,
+            IRbinaryOperator::Fsub => false,
+            IRbinaryOperator::Fmul => false,
+            IRbinaryOperator::Fdiv => false,
+            IRbinaryOperator::Frem => false,
+            _ => true,
+        }
+    }
+    pub fn is_float(&self) -> bool {
+        match self {
+            IRbinaryOperator::Feq => true,
+            IRbinaryOperator::FnotEq => true,
+            IRbinaryOperator::Fgreater => true,
+            IRbinaryOperator::FgreaterEq => true,
+            IRbinaryOperator::Fless => true,
+            IRbinaryOperator::FlessEq => true,
+            IRbinaryOperator::Fadd => true,
+            IRbinaryOperator::Fsub => true,
+            IRbinaryOperator::Fmul => true,
+            IRbinaryOperator::Fdiv => true,
+            IRbinaryOperator::Frem => true,
+            _ => false,
+        }
+    }
+    pub fn is_comparison(&self) -> bool {
+        match self {
+            IRbinaryOperator::Eq |
+            IRbinaryOperator::NotEq |
+            IRbinaryOperator::Ugreater |
+            IRbinaryOperator::UgreaterEq |
+            IRbinaryOperator::Uless |
+            IRbinaryOperator::UlessEq |
+            IRbinaryOperator::Sgreater |
+            IRbinaryOperator::SgreaterEq |
+            IRbinaryOperator::Sless |
+            IRbinaryOperator::SlessEq |
+            IRbinaryOperator::Feq |
+            IRbinaryOperator::FnotEq |
+            IRbinaryOperator::Fgreater |
+            IRbinaryOperator::FgreaterEq |
+            IRbinaryOperator::Fless |
+            IRbinaryOperator::FlessEq => true,
+            _ => false,
+        }
+    }
+}
 #[derive(PartialEq, Clone, Debug)]
 pub enum VariableType<'a, 'b> {
     Primitive(&'a str),
@@ -193,7 +249,7 @@ pub fn lower_function<'a, 'b>(
     });
 }
 #[derive(PartialEq, Clone, Debug)]
-enum RegisterType<'a, 'b> {
+pub enum RegisterType<'a, 'b> {
     I8,
     I16,
     I32,
@@ -291,7 +347,7 @@ fn lower_expression<'a, 'b>(
         },
         Expression::Float{ typ, value} => {
             registers.push(RegisterType::from_str(typ.as_bytes())?);
-            instructions.push(Instruction::ImmediateFloat { destination: registers.len() as u16 - 1, value: *value });
+            instructions.push(Instruction::ImmediateFloat { typ: *typ, destination: registers.len() as u16 - 1, value: *value });
             return Some(registers.len() as u16 - 1);
         },
         Expression::Bool(b) => {
@@ -625,7 +681,11 @@ fn lower_expression<'a, 'b>(
             }
             else if left_t.is_float() && cast_type == RegisterType::Bool {
                 registers.push(left_t.clone());
-                instructions.push(Instruction::ImmediateFloat { destination: registers.len() as u16 - 1, value: 0.0 });
+                instructions.push(Instruction::ImmediateFloat { 
+                    typ: if left_t.size() == 32 { "f32" } else { "f64" }, 
+                    destination: registers.len() as u16 - 1, 
+                    value: 0.0 
+                });
                 registers.push(RegisterType::Bool);
 
                 instructions.push(Instruction::BinaryOperation { 
@@ -999,6 +1059,7 @@ fn lower_statement<'a, 'b>(
 
             blocks.push(Block { instructions: arena.vec_capacity(16) });
         },
+        Statement::Switch { value, arms, default } => todo!(),
     }
     return Some(());
 }
