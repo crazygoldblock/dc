@@ -723,56 +723,50 @@ fn lower_expression<'a, 'b>(
             return Some(registers.len() as u16 - 1);
         },
         Expression::Call { expr, parameters } => {
-            let name = if let Expression::Name(n) = expr {
-                *n
+            let name = if let Expression::Name(name) = expr {
+                *name
             } else { panic!(); };
 
-            let f = if let Some(f) = functions.get(name) {
-                f
-            }
-            else { panic!(); };
+            let function = functions.get(name).unwrap();
 
-            if parameters.len() != f.parameters.len() {
+            if parameters.len() != function.parameters.len() {
                 panic!();
             }
 
-            let register_paratemers: &mut [u16] = arena.alloc_array(0u16, f.parameters.len());
+            let register_paratemers: &mut [u16] = arena.alloc_array(0u16, function.parameters.len());
 
-            for (i, par) in f.parameters.iter().enumerate() {
+            for (i, (parameter_type, _)) in function.parameters.iter().enumerate() {
                 let register = lower_expression(&parameters[i], arena, registers, instructions, variables, functions).unwrap();
 
-                let sign_type = registers[register as usize].clone();
+                let expression_type = registers[register as usize].clone();
 
-                let correct_type = if let Type::Name(n) = f.parameters[i].0 {
+                let correct_type = if let Type::Name(n) = parameter_type {
                     n
                 }
                 else { panic!(); };
 
-                if RegisterType::from_str(correct_type).unwrap() != sign_type {
+                if RegisterType::from_str(correct_type).unwrap() != expression_type {
                     panic!();
                 }
 
                 register_paratemers[i] = register;
             }
 
-            let return_type = if let Some(t) = &f.return_type {
-                if let Type::Name(n) = t {
-                    registers.push(RegisterType::from_str(n).unwrap());
-                    Some(n)
+            let returns = if let Some(typ) = &function.return_type {
+                if let Type::Name(type_name) = typ {
+                    registers.push(RegisterType::from_str(type_name).unwrap());
+                    Some(registers.len() as u16 -1)
                 }
-                else { None }
+                else { panic!(); }
             }
             else { None };
 
-            let register_paratemers: &[u16] = register_paratemers;
-
             instructions.push(Instruction::Call ( 
                 arena.alloc((name, 
-                register_paratemers, 
-                if return_type.is_some() { Some(registers.len() as u16 -1) } else { None })) 
-            ));
-
-            return if return_type.is_some() { Some(registers.len() as u16 -1) } else { Some(u16::MAX) };
+                register_paratemers as &'b [u16], 
+                returns, 
+            ))));
+            return returns;
         },
         Expression::Field { expr, field } => todo!(),
         Expression::ArrayInit(expressions) => todo!(),

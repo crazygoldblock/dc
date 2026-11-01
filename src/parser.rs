@@ -4,8 +4,6 @@ use std::ops::DerefMut;
 
 use crate::{arena::Arena, lexer::{TokenError, Tokenizer}};
 
-// enum, switch+case+default, string literal
-
 #[derive(Clone, PartialEq, Debug)]
 pub enum Expression<'a, 'b> {
     Integer{
