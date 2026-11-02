@@ -27,8 +27,7 @@ fn check_ast_and_ir() {
                         ast += &format!("{:?}", fr);
 
                         if let Fragment::ASTfunction(func) = fr {
-                            let functions = HashMap::new();
-                            let cf = lower_function(&arena, &func, &functions).unwrap();
+                            let cf = lower_function(&arena, &func).unwrap();
                             ir += &format!("{:?}", cf);
                         }
                         frag = parse_file(&mut tokenizer, &arena);

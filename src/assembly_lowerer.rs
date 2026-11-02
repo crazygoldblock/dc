@@ -651,7 +651,7 @@ pub fn lower_function<'a>(
                     }
                     else { panic!(); }
                 },
-                Instruction::Call((name, parameters, ret)) => {
+                Instruction::Call((name, parameters, _, ret, _)) => {
                     for par in *parameters {
                         load(instructions, *par, Register::Rax, var_count);
                         // push rax
@@ -662,11 +662,9 @@ pub fn lower_function<'a>(
                     let offset = instructions.len() as u32 - functions.get(name).unwrap() - 6;
                     instructions.extend_from_slice(&offset.to_le_bytes());
 
-                    if let Some(ret) = ret {
-                        // pop rax
-                        instructions.push(0x58);
-                        store(instructions, *ret, Register::Rax, &mut var_count);
-                    }
+                    // pop rax
+                    instructions.push(0x58);
+                    store(instructions, *ret, Register::Rax, &mut var_count);
                 },
                 Instruction::Return { value } => {
                     match value {

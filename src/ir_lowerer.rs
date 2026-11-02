@@ -48,7 +48,9 @@ pub enum Instruction<'a, 'b> {
     Call(&'b ( 
         &'a [u8],
         &'b [u16],
-        Option<u16>),
+        &'b [RegisterType<'a, 'b>],
+        u16,
+        RegisterType<'a, 'b>),
     ),
     Return{
         value: Option<u16>,
@@ -210,7 +212,6 @@ pub enum VariableType<'a, 'b> {
 pub fn lower_function<'a, 'b>(
     arena: &'b Arena, 
     function: &ASTfunction<'a, 'b>, 
-    functions: &HashMap<&'a [u8], ASTfunction<'a, 'b>>,
 ) -> Option<IRfunction<'a, 'b>> {
     let mut registers = Vec::new();
     let mut blocks = arena.vec_capacity(8);
@@ -238,7 +239,7 @@ pub fn lower_function<'a, 'b>(
     else { None };
 
     for s in function.body {
-        lower_statement(s, arena, &mut registers, &mut blocks, &mut variables, functions, return_type.clone(), None).unwrap();
+        lower_statement(s, arena, &mut registers, &mut blocks, &mut variables, return_type.clone(), None).unwrap();
     }
 
     return Some(IRfunction {
@@ -250,6 +251,8 @@ pub fn lower_function<'a, 'b>(
 }
 #[derive(PartialEq, Clone, Debug)]
 pub enum RegisterType<'a, 'b> {
+    None,
+    
     I8,
     I16,
     I32,
@@ -270,6 +273,7 @@ pub enum RegisterType<'a, 'b> {
 impl<'a, 'b> RegisterType<'a, 'b> {
     fn size(&self) -> u8 {
         match self {
+            RegisterType::None => panic!(),
             RegisterType::I8 => 8,
             RegisterType::I16 => 16,
             RegisterType::I32 => 32,
@@ -329,6 +333,9 @@ impl<'a, 'b> RegisterType<'a, 'b> {
             _ => return None,
         })
     }
+    fn is_none(&self) -> bool {
+        *self == RegisterType::None
+    }
 }
 fn lower_expression<'a, 'b>(
     expression: &Expression<'a, 'b>, 
@@ -336,7 +343,6 @@ fn lower_expression<'a, 'b>(
     registers: &mut Vec<RegisterType<'a, 'b>>, 
     instructions: &mut VecArena<'b, Instruction<'a, 'b>>,
     variables: &mut Vec<(&'a [u8], u16)>,
-    functions: &HashMap<&'a [u8], ASTfunction<'a, 'b>>,
 ) -> Option<u16> {
 
     match expression {
@@ -362,12 +368,29 @@ fn lower_expression<'a, 'b>(
             return Some(registers.len() as u16 - 1);
         },
         Expression::BinaryOperator { operator, left, right } => {
-            let left_reg = lower_expression(left, arena, registers, instructions, variables, functions).unwrap();
+            let left_reg = lower_expression(left, arena, registers, instructions, variables).unwrap();
 
-            let right_reg = lower_expression(right, arena, registers, instructions, variables, functions).unwrap();
+            let right_reg = lower_expression(right, arena, registers, instructions, variables).unwrap();
 
-            let left_t = registers[left_reg as usize].clone();
-            let right_t = registers[right_reg as usize].clone();
+            let mut left_t = registers[left_reg as usize].clone();
+            let mut right_t = registers[right_reg as usize].clone();
+
+            if left_t == RegisterType::None && right_t == RegisterType::None {
+                panic!();
+            }
+
+            if *operator != ASTbinaryOperator::Shl && *operator != ASTbinaryOperator::Shr {
+                if left_t.is_none() { 
+                    left_t = right_t.clone(); 
+                    registers[left_reg as usize] = right_t.clone();
+                    insert_return(arena, instructions, right_t.clone()); 
+                }
+                if right_t.is_none() { 
+                    right_t = left_t.clone(); 
+                    registers[right_reg as usize] = left_t.clone();
+                    insert_return(arena, instructions, left_t.clone()); 
+                }
+            }
 
             let op = match operator {
                 ASTbinaryOperator::Add => {
@@ -455,16 +478,18 @@ fn lower_expression<'a, 'b>(
                     (IRbinaryOperator::Or, left_t, size)
                 },
                 ASTbinaryOperator::Shl => {
+                    if left_t.is_none() || right_t.is_none() { panic!(); }
                     // TODO: out of bounds shift
-                    if (!right_t.is_signed() && !right_t.is_unsigned()) || (!left_t.is_signed() && !left_t.is_unsigned()) {
+                    if !right_t.is_unsigned() || !left_t.is_int() {
                         panic!();
                     }
                     let size = left_t.size();
                     (IRbinaryOperator::Shl, left_t, size)
                 },
                 ASTbinaryOperator::Shr => {
+                    if left_t.is_none() || right_t.is_none() { panic!(); }
                     // TODO: out of bounds shift
-                    if (!right_t.is_signed() && !right_t.is_unsigned()) || (!left_t.is_signed() && !left_t.is_unsigned()) {
+                    if !right_t.is_unsigned() || !left_t.is_int() {
                         panic!();
                     }
 
@@ -574,13 +599,13 @@ fn lower_expression<'a, 'b>(
             return Some(registers.len() as u16 - 1);
         },
         Expression::UnaryOperator { operator, expr } => {
-            let reg = lower_expression(expr, arena, registers, instructions, variables, functions).unwrap();
+            let reg = lower_expression(expr, arena, registers, instructions, variables).unwrap();
 
-            let t = registers[reg as usize].clone();
+            let mut t = registers[reg as usize].clone();
 
             let op = match operator {
                 ASTunaryOperator::Sub => {
-                    if !t.is_int() {
+                    if !t.is_int() || t.is_none() {
                         panic!();
                     } 
                     let size = t.size();
@@ -595,7 +620,7 @@ fn lower_expression<'a, 'b>(
                     });
                 },
                 ASTunaryOperator::Not => {
-                    if !t.is_int() {
+                    if !t.is_int() || t.is_none() {
                         panic!();
                     } 
                     let size = t.size();
@@ -610,6 +635,11 @@ fn lower_expression<'a, 'b>(
                     });
                 },
                 ASTunaryOperator::Invert => {
+                    if t.is_none() { 
+                        t = RegisterType::Bool;
+                        registers[reg as usize] = RegisterType::Bool;
+                        insert_return(arena, instructions, RegisterType::Bool); 
+                    }
                     if t != RegisterType::Bool {
                         panic!();
                     } 
@@ -632,8 +662,10 @@ fn lower_expression<'a, 'b>(
         Expression::Cast { expr, typ } => {
             // TODO: pointer casts
 
-            let left_reg = lower_expression(expr, arena, registers, instructions, variables, functions).unwrap();
+            let left_reg = lower_expression(expr, arena, registers, instructions, variables).unwrap();
             let left_t = registers[left_reg as usize].clone();
+
+            if left_t.is_none() { panic!(); }
 
             let cast_type = if let Type::Name(n) = typ {
                 n
@@ -727,46 +759,27 @@ fn lower_expression<'a, 'b>(
                 *name
             } else { panic!(); };
 
-            let function = functions.get(name).unwrap();
+            let register_paratemers: &mut [u16] = arena.alloc_array(0u16, parameters.len());
+            let register_types = arena.alloc_array(RegisterType::None, parameters.len());
 
-            if parameters.len() != function.parameters.len() {
-                panic!();
-            }
-
-            let register_paratemers: &mut [u16] = arena.alloc_array(0u16, function.parameters.len());
-
-            for (i, (parameter_type, _)) in function.parameters.iter().enumerate() {
-                let register = lower_expression(&parameters[i], arena, registers, instructions, variables, functions).unwrap();
-
+            for (i, par) in parameters.iter().enumerate() {
+                let register = lower_expression(par, arena, registers, instructions, variables).unwrap();
                 let expression_type = registers[register as usize].clone();
-
-                let correct_type = if let Type::Name(n) = parameter_type {
-                    n
-                }
-                else { panic!(); };
-
-                if RegisterType::from_str(correct_type).unwrap() != expression_type {
-                    panic!();
-                }
-
+                if expression_type.is_none() { panic!(); }
                 register_paratemers[i] = register;
+                register_types[i] = expression_type;
             }
 
-            let returns = if let Some(typ) = &function.return_type {
-                if let Type::Name(type_name) = typ {
-                    registers.push(RegisterType::from_str(type_name).unwrap());
-                    Some(registers.len() as u16 -1)
-                }
-                else { panic!(); }
-            }
-            else { None };
-
+            registers.push(RegisterType::None);
+            
             instructions.push(Instruction::Call ( 
                 arena.alloc((name, 
-                register_paratemers as &'b [u16], 
-                returns, 
+                register_paratemers as &'b [u16],  
+                register_types as &'b [RegisterType],
+                registers.len() as u16 -1,
+                RegisterType::None,
             ))));
-            return returns;
+            return Some(registers.len() as u16 -1);
         },
         Expression::Field { expr, field } => todo!(),
         Expression::ArrayInit(expressions) => todo!(),
@@ -774,24 +787,42 @@ fn lower_expression<'a, 'b>(
     }
     panic!();
 }
+fn insert_return<'a, 'b>(arena: &'b Arena, call: &mut VecArena<'b, Instruction<'a, 'b>>, correct: RegisterType<'a, 'b>) {
+    let c = call.last_mut().unwrap();
+    if let Instruction::Call(a) = c {
+        if let RegisterType::None = a.4 {
+            *c = Instruction::Call(arena.alloc((a.0, a.1, a.2, a.3, correct)));
+        }
+        else {
+            panic!();
+        }
+    }
+    else {
+        panic!();
+    }
+}
 fn lower_statement<'a, 'b>(
     statement: &Statement<'a, 'b>,
     arena: &'b Arena,
     registers: &mut Vec<RegisterType<'a, 'b>>, 
     blocks: &mut VecArena<Block<'a, 'b>>,
     variables: &mut Vec<(&'a [u8], u16)>,
-    functions: &HashMap<&'a [u8], ASTfunction<'a, 'b>>,
     return_type: Option<RegisterType<'a, 'b>>,
     last_loop_start: Option<i32>,
 ) -> Option<()> {
     match statement {
         Statement::Assignment { destination, value } => {
             let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let value_reg = lower_expression(value, arena, registers, instructions, variables, functions).unwrap();
+            let value_reg = lower_expression(value, arena, registers, instructions, variables).unwrap();
 
             if let Some(d) = destination {
                 if let Expression::Name(n) = d {
                     let dest_reg = variables.iter().find(|x| &x.0 == n).unwrap();
+
+                    if registers[value_reg as usize].is_none() { 
+                        registers[value_reg as usize] = registers[dest_reg.1 as usize].clone();
+                        insert_return(arena, instructions, registers[dest_reg.1 as usize].clone());
+                    }
 
                     if registers[dest_reg.1 as usize] != registers[value_reg as usize] {
                         panic!();
@@ -799,13 +830,16 @@ fn lower_statement<'a, 'b>(
 
                     instructions.push(Instruction::Move { source: value_reg, destination: dest_reg.1 });
                 }
-                else { panic!(); }
             }
         },
         Statement::Return { value } => {
             let instructions = &mut blocks.last_mut().unwrap().instructions;
             let value_reg = if let Some(v) = value {
-                let value_reg = lower_expression(v, arena, registers, instructions, variables, functions).unwrap();
+                let value_reg = lower_expression(v, arena, registers, instructions, variables).unwrap();
+                if registers[value_reg as usize].is_none() {
+                    registers[value_reg as usize] = return_type.clone().unwrap();
+                    insert_return(arena, instructions, return_type.clone().unwrap());
+                }
                 if return_type.is_none() || return_type.unwrap() != registers[value_reg as usize] {
                     panic!();
                 }
@@ -822,8 +856,12 @@ fn lower_statement<'a, 'b>(
         },
         Statement::If { condition, body, else_body } => {
             let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let c = lower_expression(condition, arena, registers, instructions, variables, functions).unwrap();
+            let c = lower_expression(condition, arena, registers, instructions, variables).unwrap();
             
+            if registers[c as usize].is_none() {
+                registers[c as usize] = RegisterType::Bool;
+                insert_return(arena, instructions, RegisterType::Bool);
+            }
             if registers[c as usize] != RegisterType::Bool {
                 panic!();
             }
@@ -845,7 +883,7 @@ fn lower_statement<'a, 'b>(
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), last_loop_start).unwrap();
+                lower_statement(s, arena, registers, blocks, variables, return_type.clone(), last_loop_start).unwrap();
             }
 
             variables.truncate(var_len);
@@ -865,7 +903,7 @@ fn lower_statement<'a, 'b>(
                 let var_len = variables.len();
 
                 for s in *e {
-                    lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), last_loop_start).unwrap();
+                    lower_statement(s, arena, registers, blocks, variables, return_type.clone(), last_loop_start).unwrap();
                 }
 
                 while variables.len() > var_len {
@@ -886,8 +924,12 @@ fn lower_statement<'a, 'b>(
             let condition_block_index = blocks.len()-1;
 
             let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let c = lower_expression(condition, arena, registers, instructions, variables, functions).unwrap();
+            let c = lower_expression(condition, arena, registers, instructions, variables).unwrap();
 
+            if registers[c as usize].is_none() {
+                registers[c as usize] = RegisterType::Bool;
+                insert_return(arena, instructions, RegisterType::Bool);
+            }
             if registers[c as usize] != RegisterType::Bool {
                 panic!();
             }
@@ -909,7 +951,7 @@ fn lower_statement<'a, 'b>(
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), Some(condition_block_index as i32)).unwrap();
+                lower_statement(s, arena, registers, blocks, variables, return_type.clone(), Some(condition_block_index as i32)).unwrap();
             }
 
             while variables.len() > var_len {
@@ -942,7 +984,12 @@ fn lower_statement<'a, 'b>(
             let reg_t = RegisterType::from_str(*var_type).unwrap();
 
             if let Some(v) = value {
-                let value_reg = lower_expression(v, arena, registers, instructions, variables, functions).unwrap();
+                let value_reg = lower_expression(v, arena, registers, instructions, variables).unwrap();
+                
+                if registers[value_reg as usize].is_none() {
+                    registers[value_reg as usize] = reg_t.clone();
+                    insert_return(arena, instructions, reg_t.clone());
+                }
                 if registers[value_reg as usize] != reg_t {
                     panic!();
                 }
@@ -961,7 +1008,7 @@ fn lower_statement<'a, 'b>(
             let var_len = variables.len();
 
             if let Some(d) = declaration {
-                lower_statement(d, arena, registers, blocks, variables, functions, return_type.clone(), last_loop_start).unwrap();
+                lower_statement(d, arena, registers, blocks, variables, return_type.clone(), last_loop_start).unwrap();
             }
             
             blocks.push(Block { instructions: arena.vec_capacity(16) });
@@ -969,8 +1016,12 @@ fn lower_statement<'a, 'b>(
 
             let instructions = &mut blocks.last_mut().unwrap().instructions;
             let condition_reg = if let Some(cond) = condition {
-                let c = lower_expression(cond, arena, registers, instructions, variables, functions).unwrap();
+                let c = lower_expression(cond, arena, registers, instructions, variables).unwrap();
 
+                if registers[c as usize].is_none() {
+                    registers[c as usize] = RegisterType::Bool;
+                    insert_return(arena, instructions, RegisterType::Bool);
+                }
                 if registers[c as usize] != RegisterType::Bool {
                     panic!();
                 }
@@ -992,11 +1043,11 @@ fn lower_statement<'a, 'b>(
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), Some(condition_block_index as i32)).unwrap();
+                lower_statement(s, arena, registers, blocks, variables, return_type.clone(), Some(condition_block_index as i32)).unwrap();
             }
 
             if let Some(ite) = iteration {
-                lower_statement(ite, arena, registers, blocks, variables, functions, return_type.clone(), Some(condition_block_index as i32)).unwrap();
+                lower_statement(ite, arena, registers, blocks, variables, return_type.clone(), Some(condition_block_index as i32)).unwrap();
             }
 
             while variables.len() > var_len {
@@ -1030,7 +1081,7 @@ fn lower_statement<'a, 'b>(
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, functions, return_type.clone(), Some(start_block_index as i32)).unwrap();
+                lower_statement(s, arena, registers, blocks, variables, return_type.clone(), Some(start_block_index as i32)).unwrap();
             }
 
             while variables.len() > var_len {
@@ -1038,8 +1089,12 @@ fn lower_statement<'a, 'b>(
             }
 
             let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let c = lower_expression(condition, arena, registers, instructions, variables, functions).unwrap();
+            let c = lower_expression(condition, arena, registers, instructions, variables).unwrap();
 
+            if registers[c as usize].is_none() {
+                registers[c as usize] = RegisterType::Bool;
+                insert_return(arena, instructions, RegisterType::Bool);
+            }
             if registers[c as usize] != RegisterType::Bool {
                 panic!();
             }
