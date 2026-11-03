@@ -550,8 +550,8 @@ fn parse_integer(tokens: &mut Tokenizer) -> Option<(u64, &'static str)> {
                 _ => return None,
             }
         }
-        result += (input[i] - b'0') as i128;
         result *= 10;
+        result += (input[i] - b'0') as i128;
     }
     result *= sign;
     return Some((check(result, true, u32::MAX as i128)? as u64, "i32"));

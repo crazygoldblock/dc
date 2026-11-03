@@ -1,7 +1,7 @@
 use std::alloc::{Layout, alloc};
 use std::fmt::{Debug, Formatter, Result};
 use std::mem::{MaybeUninit, transmute};
-use std::ptr::copy_nonoverlapping;
+use std::ptr::{copy_nonoverlapping, read};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 pub struct Arena {
@@ -79,6 +79,16 @@ impl<'a, T> VecArena<'a, T> {
             }   
         }
     }
+    pub fn last(&self) -> Option<&T> {
+        if self.len == 0 {
+            None
+        }
+        else {
+            unsafe {
+                Some(&mut *self.buffer.add(self.len-1))
+            }   
+        }
+    }
     pub fn len(&self) -> usize {
         self.len
     }
@@ -90,6 +100,15 @@ impl<'a, T> VecArena<'a, T> {
             unsafe {
                 Some(&mut *self.buffer.add(index))
             }
+        }
+    }
+    pub fn pop(&mut self) -> Option<T> {
+        if self.len == 0 {
+            return None;
+        }
+        unsafe {
+            self.len -= 1;
+            Some(read(self.buffer.add(self.len)))
         }
     }
 }

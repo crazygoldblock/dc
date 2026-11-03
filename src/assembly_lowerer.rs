@@ -1,26 +1,26 @@
 #![allow(unused)]
 
-use std::collections::HashMap;
-
+use crate::arena::Arena;
 use crate::ir_lowerer::IRfunction;
 use crate::ir_lowerer::Instruction;
 use crate::ir_lowerer::IRbinaryOperator;
 use crate::ir_lowerer::ExtTruncType;
 use crate::ir_lowerer::ConvertType;
+use crate::ir_lowerer::RegisterType;
 
 // rbp = start rsp
+// jump into last nonexistent block
 
-// TODO: call offset patching
-
-pub fn lower_function<'a>(
-    function: &IRfunction,
-    functions: &HashMap<&'a [u8], u32>,
+pub fn lower_function<'a, 'b>(
+    function: &IRfunction<'a, 'b>,
     instructions: &mut Vec<u8>,
-) {
+    arena: &'b Arena,
+) -> Option<&'b [(&'a [u8], RegisterType<'a, 'b>, &'b [RegisterType<'a, 'b>], usize)]> {
     let mut var_count = function.paramaters.len() + 1;
 
     let mut jumps = Vec::new();
     let mut labels = Vec::new();
+    let mut function_calls = arena.vec_capacity(8);
 
     instructions.extend_from_slice(&[
         // mov rbp, rsp
@@ -37,7 +37,7 @@ pub fn lower_function<'a>(
                 Instruction::NoOperation => panic!(),
                 Instruction::Immediate { destination, value } => {
                     // mov rax [value]
-                    instructions.extend_from_slice(&[0x48, 0xB8,  0x50]);
+                    instructions.extend_from_slice(&[0x48, 0xB8]);
                     instructions.extend_from_slice(&value.to_le_bytes());
                     
                     store(instructions, *destination, Register::Rax, &mut var_count);
@@ -48,7 +48,7 @@ pub fn lower_function<'a>(
                     }
                     if *typ == "f64" {
                         // mov rax [value]
-                        instructions.extend_from_slice(&[0x48, 0xB8,  0x50]);
+                        instructions.extend_from_slice(&[0x48, 0xB8]);
                         instructions.extend_from_slice(&value.to_le_bytes());
                     
                         store(instructions, *destination, Register::Rax, &mut var_count);
@@ -651,7 +651,7 @@ pub fn lower_function<'a>(
                     }
                     else { panic!(); }
                 },
-                Instruction::Call((name, parameters, _, ret, _)) => {
+                Instruction::Call((name, parameters, parameter_types, ret, return_type)) => {
                     // push rbp
                     instructions.push(0x55);
 
@@ -662,8 +662,8 @@ pub fn lower_function<'a>(
                     }
                     // call [rip + offset]
                     instructions.extend_from_slice(&[0xFF, 0x15]);
-                    let offset = instructions.len() as u32 - functions.get(name).unwrap() - 6;
-                    instructions.extend_from_slice(&offset.to_le_bytes());
+                    function_calls.push((*name, return_type.clone(), *parameter_types, instructions.len()));
+                    instructions.extend_from_slice(&0u32.to_le_bytes());
                     
                     store(instructions, *ret, Register::Rax, &mut var_count);
                     
@@ -809,7 +809,7 @@ pub fn lower_function<'a>(
     labels.push(instructions.len() as u32);
 
     if function.return_type.is_some()  {
-        if !matches!(function.blocks[0].instructions.array()[0], Instruction::Return{value: _}) {
+        if !matches!(function.blocks.last().unwrap().instructions.last().unwrap(), Instruction::Return{value: _}) {
             panic!();
         }
     }
@@ -827,10 +827,11 @@ pub fn lower_function<'a>(
     }
 
     for (jmp, label) in jumps {
-        let offset = labels[label as usize].to_le_bytes();
-        instructions[jmp..].copy_from_slice(&offset);
+        let offset = labels[label as usize] as i32 - jmp as i32 - 4;
+        instructions[jmp..jmp+4].copy_from_slice(&offset.to_le_bytes());
     }
 
+    Some(function_calls.array())
 }
 fn load(instructions: &mut Vec<u8>, source: u16, register: Register, var_count: usize) {
     if source as usize >= var_count {
@@ -875,7 +876,7 @@ fn store(instructions: &mut Vec<u8>, destination: u16, register: Register, var_c
     }
     match register {
         Register::Rax => {
-            // mov rsp + [-8 * destination+1], rax
+            // mov rbp + [-8 * destination+1], rax
             instructions.extend_from_slice(&[0x48, 0x89, 0x85]);
         },
         Register::Xmm0 => {
