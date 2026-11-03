@@ -1,7 +1,5 @@
 #![allow(unused)]
 
-use std::collections::HashMap;
-
 use crate::arena::{Arena, VecArena};
 use crate::parser::{Expression, ASTfunction, Statement, Struct, Type, Union, ASTbinaryOperator, ASTunaryOperator};
 
@@ -229,6 +227,7 @@ pub fn lower_function<'a, 'b>(
         registers.push(reg_type);
         variables.push((p.1, i as u16));
     }
+    registers.push(RegisterType::None);
 
     let return_type = if let Some(ret_t) = function.return_type.clone() {
         if let Type::Name(n) = ret_t {

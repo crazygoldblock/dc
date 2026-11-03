@@ -1,7 +1,5 @@
 #![allow(unused)]
 
-use std::ops::DerefMut;
-
 use crate::{arena::Arena, lexer::{TokenError, Tokenizer}};
 
 #[derive(Clone, PartialEq, Debug)]
@@ -325,7 +323,6 @@ fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Res
     let mut bracket_depth = 0;
     let e = parse_binary_expression(tokens, arena, 0, &mut bracket_depth)?;
     if bracket_depth != 0 {
-        println!("REST: {}", tokens.rest());
         return Err(ParseError::UnclosedBrackets { line: tokens.get_current_line() });
     }
     Ok(e)

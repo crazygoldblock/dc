@@ -17,7 +17,7 @@ pub fn lower_function<'a>(
     functions: &HashMap<&'a [u8], u32>,
     instructions: &mut Vec<u8>,
 ) {
-    let mut var_count = function.paramaters.len();
+    let mut var_count = function.paramaters.len() + 1;
 
     let mut jumps = Vec::new();
     let mut labels = Vec::new();
@@ -25,10 +25,10 @@ pub fn lower_function<'a>(
     instructions.extend_from_slice(&[
         // mov rbp, rsp
         0x48, 0x89, 0xE5,
-        // sub rbp, [8*parameter_count]
-        0x48, 0x81, 0xED
+        // add rbp, [8*parameter_count+1]
+        0x48, 0x81, 0xC5
     ]);
-    instructions.extend_from_slice(&(function.paramaters.len() as u32 * 8).to_le_bytes());
+    instructions.extend_from_slice(&( (function.paramaters.len() as u32 + 1) * 8).to_le_bytes());
 
     for b in function.blocks {
         labels.push(instructions.len() as u32);
@@ -652,6 +652,9 @@ pub fn lower_function<'a>(
                     else { panic!(); }
                 },
                 Instruction::Call((name, parameters, _, ret, _)) => {
+                    // push rbp
+                    instructions.push(0x55);
+
                     for par in *parameters {
                         load(instructions, *par, Register::Rax, var_count);
                         // push rax
@@ -661,34 +664,30 @@ pub fn lower_function<'a>(
                     instructions.extend_from_slice(&[0xFF, 0x15]);
                     let offset = instructions.len() as u32 - functions.get(name).unwrap() - 6;
                     instructions.extend_from_slice(&offset.to_le_bytes());
-
-                    // pop rax
-                    instructions.push(0x58);
+                    
                     store(instructions, *ret, Register::Rax, &mut var_count);
+                    
+                    // add rsp [parameters*8]
+                    instructions.extend_from_slice(&[0x48, 0x81, 0xC4]);
+                    instructions.extend_from_slice(&(parameters.len() as u32 * 8).to_le_bytes());
+ 
+                    // pop rbp
+                    instructions.push(0x5D);
                 },
                 Instruction::Return { value } => {
-                    match value {
-                        Some(value) => {
-                            load(instructions, *value, Register::Rax, var_count);
-                            instructions.extend_from_slice(&[
-                                // mov rsp, rbp
-                                0x48, 0x89, 0xEC,
-                                // push rax
-                                0x50,
-                                // ret
-                                0xC3,
-                            ]);
-                            
-                        },
-                        None => {
-                            instructions.extend_from_slice(&[
-                                // mov rsp, rbp
-                                0x48, 0x89, 0xEC,
-                                // ret
-                                0xC3,
-                            ]);
-                        },
+                    if let Some(value) = value {
+                        load(instructions, *value, Register::Rax, var_count);
                     }
+                    // sub rbp, [8*parameter_count+1]
+                    instructions.extend_from_slice(&[0x48, 0x81, 0xED]);
+                    instructions.extend_from_slice(&( (function.paramaters.len() as u32 + 1) * 8).to_le_bytes());
+
+                    instructions.extend_from_slice(&[
+                        // move rsp, rbp
+                        0x48, 0x89, 0xEC,
+                        // ret
+                        0xC3,
+                    ]);
                 },
                 Instruction::Branch { condition, label } => {
                     load(instructions, *condition, Register::Rax, var_count);
@@ -807,14 +806,20 @@ pub fn lower_function<'a>(
         }
     }
 
+    labels.push(instructions.len() as u32);
+
     if function.return_type.is_some()  {
         if !matches!(function.blocks[0].instructions.array()[0], Instruction::Return{value: _}) {
             panic!();
         }
     }
     else {
+        // sub rbp, [8*parameter_count+1]
+        instructions.extend_from_slice(&[0x48, 0x81, 0xED]);
+        instructions.extend_from_slice(&( (function.paramaters.len() as u32 + 1) * 8).to_le_bytes());
+
         instructions.extend_from_slice(&[
-            // mov rsp, rbp
+            // move rsp, rbp
             0x48, 0x89, 0xEC,
             // ret
             0xC3,
