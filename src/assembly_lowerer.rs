@@ -62,8 +62,32 @@ pub fn lower_function<'a, 'b>(
                     }
                     else { panic!(); }
                 },
-                Instruction::Load { size, destination, address } => todo!(),
-                Instruction::Store { size, source, address } => todo!(),
+                Instruction::Load { size, destination, address } => {
+                    load(instructions, *address, Register::Rax, var_count);
+
+                    match size {
+                        // mov rax, [rax]
+                        64 => instructions.extend_from_slice(&[0x48, 0x8B, 0x00]),
+                        32 => instructions.extend_from_slice(&[0x8B, 0x00]),
+                        16 => instructions.extend_from_slice(&[0x66, 0x8B, 0x00]),
+                        8 => instructions.extend_from_slice(&[0x8A, 0x00]),
+                        _ => panic!(),
+                    }
+                    store(instructions, *destination, Register::Rax, &mut var_count);
+                },
+                Instruction::Store { size, source, address } => {
+                    load(instructions, *address, Register::Rax, var_count);
+                    load(instructions, *source, Register::Rbx, var_count);
+
+                    match size {
+                        // mov [rax], rbx
+                        64 => instructions.extend_from_slice(&[0x48, 0x89, 0x18]),
+                        32 => instructions.extend_from_slice(&[0x89, 0x18]),
+                        16 => instructions.extend_from_slice(&[0x66, 0x89, 0x18]),
+                        8 => instructions.extend_from_slice(&[0x88, 0x18]),
+                        _ => panic!(),
+                    }
+                },
                 Instruction::BinaryOperation { size, operation, destination, left, right } => {
                     if operation.is_float() {
                         if *size == 32 {
@@ -802,6 +826,13 @@ pub fn lower_function<'a, 'b>(
                 },
                 Instruction::LoadGlobal {  } => todo!(),
                 Instruction::StoreGlobal {  } => todo!(),
+                Instruction::AddrOf { source, destination } => {
+                    // lea rax, rbp + [-8 * index+1]
+                    instructions.extend_from_slice(&[0x48, 0x8D, 0x85]);
+                    instructions.extend_from_slice(&( -8*(*source as i32 + 1) ).to_le_bytes());
+
+                    store(instructions, *destination, Register::Rax, &mut var_count);
+                },
             }
         }
     }
