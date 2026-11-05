@@ -837,7 +837,10 @@ pub fn lower_function<'a, 'b>(
         }
     }
 
-    labels.push(instructions.len() as u32);
+    if function.return_type.is_none() {
+        labels.push(instructions.len() as u32);
+    }
+    
 
     if function.return_type.is_some()  {
         if !matches!(function.blocks.last().unwrap().instructions.last().unwrap(), Instruction::Return{value: _}) {
@@ -864,7 +867,7 @@ pub fn lower_function<'a, 'b>(
 
     Some(function_calls.array())
 }
-fn load(instructions: &mut Vec<u8>, source: u16, register: Register, var_count: usize) {
+fn load(instructions: &mut Vec<u8>, source: u32, register: Register, var_count: usize) {
     if source as usize >= var_count {
         panic!();
     }
@@ -894,9 +897,9 @@ fn load(instructions: &mut Vec<u8>, source: u16, register: Register, var_count: 
             instructions.extend_from_slice(&[0xF2, 0x0F, 0x10, 0x8D]);
         },
     }
-    instructions.extend_from_slice(&( -8*(source as i32 + 1) ).to_le_bytes());
+    instructions.extend_from_slice(&(-(source as i32)).to_le_bytes());
 }
-fn store(instructions: &mut Vec<u8>, destination: u16, register: Register, var_count: &mut usize) {
+fn store(instructions: &mut Vec<u8>, destination: u32, register: Register, var_count: &mut usize) {
     if destination as usize > *var_count {
         panic!();
     }
@@ -920,7 +923,7 @@ fn store(instructions: &mut Vec<u8>, destination: u16, register: Register, var_c
         },
         _ => panic!(),
     }
-    instructions.extend_from_slice(&( -8*(destination as i32 + 1) ).to_le_bytes());
+    instructions.extend_from_slice(&(-(destination as i32)).to_le_bytes());
 }
 enum Register {
     Rax,

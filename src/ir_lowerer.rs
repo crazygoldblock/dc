@@ -18,43 +18,43 @@ pub struct Block<'a, 'b> {
 pub enum Instruction<'a, 'b> {
     NoOperation,
     Immediate{
-        destination: u16,
+        destination: u32,
         value: u64,
     },
     ImmediateFloat{
         typ: &'static str,
-        destination: u16,
+        destination: u32,
         value: f64,
     },
     Load{
         size: u8,
-        destination: u16,
-        address: u16,
+        destination: u32,
+        address: u32,
     },
     Store{
         size: u8,
-        source: u16,
-        address: u16,
+        source: u32,
+        address: u32,
     },
     BinaryOperation{
         size: u8,
         operation: IRbinaryOperator,
-        destination: u16,
-        left: u16,
-        right: u16,
+        destination: u32,
+        left: u32,
+        right: u32,
     },
     Call(&'b ( 
         &'a [u8],
-        &'b [u16],
+        &'b [u32],
         &'b [RegisterType<'a, 'b>],
-        u16,
+        u32,
         RegisterType<'a, 'b>),
     ),
     Return{
-        value: Option<u16>,
+        value: Option<u32>,
     },
     Branch{
-        condition: u16,
+        condition: u32,
         label: i32,
     },
     Jump{
@@ -62,25 +62,25 @@ pub enum Instruction<'a, 'b> {
     },
     ExtendTruncate{
         typ: ExtTruncType,
-        source: u16,
+        source: u32,
         from_size: u8,
-        destination: u16,
+        destination: u32,
         to_size: u8,
     },
     Convert{
         typ: ConvertType,
-        source: u16,
+        source: u32,
         from_size: u8,
-        destination: u16,
+        destination: u32,
         to_size: u8,
     },
     Move{
-        source: u16,
-        destination: u16,
+        source: u32,
+        destination: u32,
     },
     AddrOf{
-        source: u16,
-        destination: u16,
+        source: u32,
+        destination: u32,
     },
     LoadGlobal{
 
@@ -215,10 +215,10 @@ pub fn lower_function<'a, 'b>(
     arena: &'b Arena, 
     function: &ASTfunction<'a, 'b>, 
 ) -> Option<IRfunction<'a, 'b>> {
-    let mut registers = Vec::new();
     let mut blocks = arena.vec_capacity(8);
     blocks.push(Block { instructions: arena.vec_capacity(16) });
     let mut variables = Vec::new();
+    let mut stack_size = 0;
 
     let parameters = arena.alloc_array(RegisterType::Bool, function.parameters.len());
 
@@ -228,10 +228,10 @@ pub fn lower_function<'a, 'b>(
         }
         else { panic!(); };
         parameters[i] = reg_type.clone();
-        registers.push(reg_type);
-        variables.push((p.1, i as u16));
+        stack_size += 8;
+        variables.push((p.1, stack_size, reg_type.clone()));
     }
-    registers.push(RegisterType::None);
+    stack_size += 8;
 
     let return_type = if let Some(ret_t) = function.return_type.clone() {
         if let Type::Name(n) = ret_t {
@@ -242,7 +242,7 @@ pub fn lower_function<'a, 'b>(
     else { None };
 
     for s in function.body {
-        lower_statement(s, arena, &mut registers, &mut blocks, &mut variables, return_type.clone(), None).unwrap();
+        lower_statement(s, arena, &mut stack_size, &mut blocks, &mut variables, return_type.clone(), None).unwrap();
     }
 
     return Some(IRfunction {
@@ -359,370 +359,368 @@ impl<'a, 'b> RegisterType<'a, 'b> {
 fn lower_expression<'a, 'b>(
     expression: &Expression<'a, 'b>, 
     arena: &'b Arena, 
-    registers: &mut Vec<RegisterType<'a, 'b>>, 
+    stack_size: &mut u32, 
     instructions: &mut VecArena<'b, Instruction<'a, 'b>>,
-    variables: &mut Vec<(&'a [u8], u16)>,
-) -> Option<u16> {
+    variables: &mut Vec<(&'a [u8], u32, RegisterType<'a, 'b>)>,
+) -> Option<(u32, RegisterType<'a, 'b>)> {
 
     match expression {
         Expression::Integer{ typ, value } => {
-            registers.push(RegisterType::from_str(typ.as_bytes()).unwrap());
-            instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: *value });
-            return Some(registers.len() as u16 - 1);
+            let typ = RegisterType::from_str(typ.as_bytes()).unwrap();
+            *stack_size += 8;
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: *value });
+            return Some((*stack_size, typ));
         },
         Expression::Float{ typ, value} => {
-            registers.push(RegisterType::from_str(typ.as_bytes())?);
-            instructions.push(Instruction::ImmediateFloat { typ: *typ, destination: registers.len() as u16 - 1, value: *value });
-            return Some(registers.len() as u16 - 1);
+            let typ_r = RegisterType::from_str(typ.as_bytes()).unwrap();
+            *stack_size += 8;
+            instructions.push(Instruction::ImmediateFloat { typ: *typ, destination: *stack_size, value: *value });
+            return Some((*stack_size, typ_r));
         },
         Expression::Bool(b) => {
-            registers.push(RegisterType::Bool);
-            instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: *b as u64 });
-            return Some(registers.len() as u16 - 1);
+            *stack_size += 8;
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: *b as u64 });
+            return Some((*stack_size, RegisterType::Bool));
         },
         Expression::Name(n) => {
-            let pos = variables.iter().find(|x| &x.0 == n).unwrap();
-            registers.push(registers[pos.1 as usize].clone());
-            instructions.push(Instruction::Move { source: pos.1, destination: registers.len() as u16 - 1 });
-            return Some(registers.len() as u16 - 1);
+            let pos = variables.iter().rev().find(|x| &x.0 == n).unwrap();
+            *stack_size += 8;
+            instructions.push(Instruction::Move { source: pos.1, destination: *stack_size });
+            return Some((*stack_size, pos.2.clone()));
         },
         Expression::BinaryOperator { operator, left, right } => {
-            let left_reg = lower_expression(left, arena, registers, instructions, variables).unwrap();
+            let (left_offset, mut left_type) = lower_expression(left, arena, stack_size, instructions, variables).unwrap();
 
-            let right_reg = lower_expression(right, arena, registers, instructions, variables).unwrap();
+            let (right_offset, mut right_type) = lower_expression(right, arena, stack_size, instructions, variables).unwrap();
 
-            let mut left_t = registers[left_reg as usize].clone();
-            let mut right_t = registers[right_reg as usize].clone();
-
-            if left_t == RegisterType::None && right_t == RegisterType::None {
+            if left_type == RegisterType::None && right_type == RegisterType::None {
                 panic!();
             }
 
             if *operator != ASTbinaryOperator::Shl && *operator != ASTbinaryOperator::Shr {
-                if left_t.is_none() { 
-                    left_t = right_t.clone(); 
-                    registers[left_reg as usize] = right_t.clone();
-                    insert_return(arena, instructions, right_t.clone()); 
+                if left_type.is_none() { 
+                    left_type = right_type.clone(); 
+                    insert_return(arena, instructions, right_type.clone()); 
                 }
-                if right_t.is_none() { 
-                    right_t = left_t.clone(); 
-                    registers[right_reg as usize] = left_t.clone();
-                    insert_return(arena, instructions, left_t.clone()); 
+                if right_type.is_none() { 
+                    right_type = left_type.clone(); 
+                    insert_return(arena, instructions, left_type.clone()); 
                 }
             }
 
             let op = match operator {
                 ASTbinaryOperator::Add => {
-                    if left_t.is_ptr() && right_t.is_int() &&right_t.size() == 64 {
-                        registers.push(RegisterType::U64);
-                        instructions.push(Instruction::Immediate { destination: registers.len() as u16-1, value: left_t.ptr_element_size() });
+                    if left_type.is_ptr() && right_type.is_int() &&right_type.size() == 64 {
+                        *stack_size += 8;
+                        instructions.push(Instruction::Immediate { destination: *stack_size, value: left_type.ptr_element_size() / 8 });
                            
                         instructions.push(Instruction::BinaryOperation { 
                             size: 64, 
                             operation: IRbinaryOperator::Mul, 
-                            destination: registers.len() as u16 - 1, 
-                            left: registers.len() as u16 - 1, 
-                            right: right_reg 
+                            destination: *stack_size, 
+                            left: *stack_size, 
+                            right: right_offset, 
                         });
-                        (IRbinaryOperator::Add, left_t, 64)
+                        (IRbinaryOperator::Add, left_type, 64)
                     }
                     else {
-                        if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
+                        if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
                             panic!();
                         }
 
-                        let op = match left_t.is_float() {
+                        let op = match left_type.is_float() {
                             true => IRbinaryOperator::Fadd,
                             false => IRbinaryOperator::Add,
                         };
-                        (op, left_t.clone(), left_t.size())
+                        (op, left_type.clone(), left_type.size())
                     }
                 },
                 ASTbinaryOperator::Sub => {
-                    if left_t.is_ptr() && right_t.is_int() &&right_t.size() == 64 {
-                        registers.push(RegisterType::U64);
-                        instructions.push(Instruction::Immediate { destination: registers.len() as u16-1, value: left_t.ptr_element_size() });
+                    if left_type.is_ptr() && right_type.is_int() &&right_type.size() == 64 {
+                        *stack_size += 8;
+                        instructions.push(Instruction::Immediate { destination: *stack_size, value: left_type.ptr_element_size() / 8 });
                            
                         instructions.push(Instruction::BinaryOperation { 
                             size: 64, 
                             operation: IRbinaryOperator::Mul, 
-                            destination: registers.len() as u16 - 1, 
-                            left: registers.len() as u16 - 1, 
-                            right: right_reg 
+                            destination: *stack_size, 
+                            left: *stack_size, 
+                            right: right_offset, 
                         });
-                        (IRbinaryOperator::Sub, left_t, 64)
+                        (IRbinaryOperator::Sub, left_type, 64)
                     }
                     else {
-                        if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
+                        if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
                             panic!();
                         }
 
-                        let op = match left_t.is_float() {
+                        let op = match left_type.is_float() {
                             true => IRbinaryOperator::Fsub,
                             false => IRbinaryOperator::Sub,
                         };
-                        let size = left_t.size();
-                        (op, left_t, size)
+                        let size = left_type.size();
+                        (op, left_type, size)
                     }
                 },
                 ASTbinaryOperator::Mul => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
                         panic!();
                     }
 
-                    let op = match left_t.is_float() {
+                    let op = match left_type.is_float() {
                         true => IRbinaryOperator::Fmul,
                         false => IRbinaryOperator::Mul,
                     };
-                    let size = left_t.size();
-                    (op, left_t, size)
+                    let size = left_type.size();
+                    (op, left_type, size)
                 },
                 ASTbinaryOperator::Div => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
                         panic!();
                     }
 
-                    let op = match (left_t.is_float(), left_t.is_signed()) {
+                    let op = match (left_type.is_float(), left_type.is_signed()) {
                         (true, _) => IRbinaryOperator::Fdiv,
                         (false, true) => IRbinaryOperator::Sdiv,
                         (false, false) => IRbinaryOperator::Udiv,
                     };
-                    let size = left_t.size();
-                    (op, left_t, size)
+                    let size = left_type.size();
+                    (op, left_type, size)
                 },
                 ASTbinaryOperator::Rem => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
                         panic!();
                     }
 
-                    let op = match (left_t.is_float(), left_t.is_signed()) {
+                    let op = match (left_type.is_float(), left_type.is_signed()) {
                         (true, _) => IRbinaryOperator::Frem,
                         (false, true) => IRbinaryOperator::Srem,
                         (false, false) => IRbinaryOperator::Urem,
                     };
-                    let size = left_t.size();
-                    (op, left_t, size)
+                    let size = left_type.size();
+                    (op, left_type, size)
                 },
                 ASTbinaryOperator::And => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) || left_t.is_float() {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) || left_type.is_float() {
                         panic!();
                     }
-                    let size = left_t.size();
-                    (IRbinaryOperator::And, left_t, size)
+                    let size = left_type.size();
+                    (IRbinaryOperator::And, left_type, size)
                 },
                 ASTbinaryOperator::Xor => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) || left_t.is_float() {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) || left_type.is_float() {
                         panic!();
                     }
-                    let size = left_t.size();
-                    (IRbinaryOperator::Xor, left_t, size)
+                    let size = left_type.size();
+                    (IRbinaryOperator::Xor, left_type, size)
                 },
                 ASTbinaryOperator::Or => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) || left_t.is_float() {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) || left_type.is_float() {
                         panic!();
                     }
-                    let size = left_t.size();
-                    (IRbinaryOperator::Or, left_t, size)
+                    let size = left_type.size();
+                    (IRbinaryOperator::Or, left_type, size)
                 },
                 ASTbinaryOperator::Shl => {
-                    if left_t.is_none() || right_t.is_none() { panic!(); }
+                    if left_type.is_none() || right_type.is_none() { panic!(); }
                     // TODO: out of bounds shift
-                    if !right_t.is_unsigned() || !left_t.is_int() {
+                    if !right_type.is_unsigned() || !left_type.is_int() {
                         panic!();
                     }
-                    let size = left_t.size();
-                    (IRbinaryOperator::Shl, left_t, size)
+                    let size = left_type.size();
+                    (IRbinaryOperator::Shl, left_type, size)
                 },
                 ASTbinaryOperator::Shr => {
-                    if left_t.is_none() || right_t.is_none() { panic!(); }
+                    if left_type.is_none() || right_type.is_none() { panic!(); }
                     // TODO: out of bounds shift
-                    if !right_t.is_unsigned() || !left_t.is_int() {
+                    if !right_type.is_unsigned() || !left_type.is_int() {
                         panic!();
                     }
 
-                    let op = match left_t.is_signed() {
+                    let op = match left_type.is_signed() {
                         true => IRbinaryOperator::ShrSignFill,
                         false => IRbinaryOperator::ShrZeroFill,
                     };
-                    let size = left_t.size();
-                    (op, left_t, size)
+                    let size = left_type.size();
+                    (op, left_type, size)
                 },
                 ASTbinaryOperator::LogicalAnd => {
-                    if left_t != RegisterType::Bool || right_t != RegisterType::Bool {
+                    if left_type != RegisterType::Bool || right_type != RegisterType::Bool {
                         panic!();
                     }
-                    let size = left_t.size();
-                    (IRbinaryOperator::And, left_t, size)
+                    let size = left_type.size();
+                    (IRbinaryOperator::And, left_type, size)
                 },
                 ASTbinaryOperator::LogicalOr => {
-                    if left_t != RegisterType::Bool || right_t != RegisterType::Bool {
+                    if left_type != RegisterType::Bool || right_type != RegisterType::Bool {
                         panic!();
                     }
-                    let size = left_t.size();
-                    (IRbinaryOperator::Or, left_t, size)
+                    let size = left_type.size();
+                    (IRbinaryOperator::Or, left_type, size)
                 },
                 ASTbinaryOperator::Less => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
                         panic!();
                     }
 
-                    let op = match (left_t.is_float(), left_t.is_signed()) {
+                    let op = match (left_type.is_float(), left_type.is_signed()) {
                         (true, _) => IRbinaryOperator::Fless,
                         (false, true) => IRbinaryOperator::Sless,
                         (false, false) => IRbinaryOperator::Uless,
                     };
-                    (op, RegisterType::Bool, left_t.size())
+                    (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::LessEq => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
                         panic!();
                     }
 
-                    let op = match (left_t.is_float(), left_t.is_signed()) {
+                    let op = match (left_type.is_float(), left_type.is_signed()) {
                         (true, _) => IRbinaryOperator::FlessEq,
                         (false, true) => IRbinaryOperator::SlessEq,
                         (false, false) => IRbinaryOperator::UlessEq,
                     };
-                    (op, RegisterType::Bool, left_t.size())
+                    (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::Greater => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
                         panic!();
                     }
 
-                    let op = match (left_t.is_float(), left_t.is_signed()) {
+                    let op = match (left_type.is_float(), left_type.is_signed()) {
                         (true, _) => IRbinaryOperator::Fgreater,
                         (false, true) => IRbinaryOperator::Sgreater,
                         (false, false) => IRbinaryOperator::Ugreater,
                     };
-                    (op, RegisterType::Bool, left_t.size())
+                    (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::GreaterEq => {
-                    if left_t != right_t || left_t == RegisterType::Bool || matches!(left_t, RegisterType::Ptr(_)) {
+                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
                         panic!();
                     }
 
-                    let op = match (left_t.is_float(), left_t.is_signed()) {
+                    let op = match (left_type.is_float(), left_type.is_signed()) {
                         (true, _) => IRbinaryOperator::FgreaterEq,
                         (false, true) => IRbinaryOperator::SgreaterEq,
                         (false, false) => IRbinaryOperator::UgreaterEq,
                     };
-                    (op, RegisterType::Bool, left_t.size())
+                    (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::Eq => {
-                    if left_t != right_t {
+                    if left_type != right_type {
                         panic!();
                     }
 
-                    let op = match left_t.is_float() {
+                    let op = match left_type.is_float() {
                         true => IRbinaryOperator::Feq,
                         false => IRbinaryOperator::Eq,
                     };
-                    (op, RegisterType::Bool, left_t.size())
+                    (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::NotEq => {
-                    if left_t != right_t {
+                    if left_type != right_type {
                         panic!();
                     }
 
-                    let op = match left_t.is_float() {
+                    let op = match left_type.is_float() {
                         true => IRbinaryOperator::FnotEq,
                         false => IRbinaryOperator::FnotEq,
                     };
-                    (op, RegisterType::Bool, left_t.size())
+                    (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::Index => todo!(),
             };
 
-            registers.push(op.1);
+            *stack_size += 8;
 
             instructions.push(Instruction::BinaryOperation { 
                 size: op.2, 
                 operation: op.0, 
-                destination: registers.len() as u16 - 1, 
-                left: left_reg, 
-                right: right_reg 
+                destination: *stack_size, 
+                left: left_offset, 
+                right: right_offset, 
             });
-            return Some(registers.len() as u16 - 1);
+            return Some((*stack_size, op.1));
         },
         Expression::UnaryOperator { operator, expr } => {
-            let reg = lower_expression(expr, arena, registers, instructions, variables).unwrap();
-
-            let mut t = registers[reg as usize].clone();
+            let (offset, mut typ) = lower_expression(expr, arena, stack_size, instructions, variables).unwrap();
 
             let op = match operator {
                 ASTunaryOperator::Sub => {
-                    if !t.is_int() || t.is_none() {
+                    if !typ.is_int() || typ.is_none() {
                         panic!();
                     } 
-                    let size = t.size();
-                    registers.push(t);
-                    instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: 0 });
+                    let size = typ.size();
+                    *stack_size += 8;
+                    instructions.push(Instruction::Immediate { destination: *stack_size, value: 0 });
                     instructions.push(Instruction::BinaryOperation { 
                         size: size, 
                         operation: IRbinaryOperator::Sub, 
-                        destination: registers.len() as u16 - 1, 
-                        left: registers.len() as u16 - 1 , 
-                        right: reg,
+                        destination: *stack_size, 
+                        left: *stack_size, 
+                        right: offset,
                     });
+                    return Some((*stack_size, typ));
                 },
                 ASTunaryOperator::Not => {
-                    if !t.is_int() || t.is_none() {
+                    if !typ.is_int() || typ.is_none() {
                         panic!();
                     } 
-                    let size = t.size();
-                    registers.push(t);
-                    instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: 1u64.wrapping_shl(size as u32)-1 });
+                    let size = typ.size();
+                    *stack_size += 8;
+                    instructions.push(Instruction::Immediate { destination: *stack_size, value: 1u64.wrapping_shl(size as u32)-1 });
                     instructions.push(Instruction::BinaryOperation { 
                         size: size, 
                         operation: IRbinaryOperator::Xor, 
-                        destination: registers.len() as u16 - 1, 
-                        left: reg, 
-                        right: registers.len() as u16 - 1,
+                        destination: *stack_size, 
+                        left: offset, 
+                        right: *stack_size,
                     });
+                    return Some((*stack_size, typ));
                 },
                 ASTunaryOperator::Invert => {
-                    if t.is_none() { 
-                        t = RegisterType::Bool;
-                        registers[reg as usize] = RegisterType::Bool;
+                    if typ.is_none() { 
+                        typ = RegisterType::Bool;
                         insert_return(arena, instructions, RegisterType::Bool); 
                     }
-                    if t != RegisterType::Bool {
+                    if typ != RegisterType::Bool {
                         panic!();
                     } 
-                    let size = t.size();
-                    registers.push(t);
-                    instructions.push(Instruction::Immediate { destination: registers.len() as u16 - 1, value: 1 });
+                    let size = typ.size();
+                    *stack_size += 8;
+                    instructions.push(Instruction::Immediate { destination: *stack_size, value: 1 });
                     instructions.push(Instruction::BinaryOperation { 
                         size: 8, 
                         operation: IRbinaryOperator::Xor, 
-                        destination: registers.len() as u16 - 1, 
-                        left: reg, 
-                        right: registers.len() as u16 - 1,
+                        destination: *stack_size, 
+                        left: offset, 
+                        right: *stack_size,
                     });
+                    return Some((*stack_size, typ));
                 },
                 ASTunaryOperator::Dereference => {
-                    if let RegisterType::Ptr(typ) = t {
+                    if let RegisterType::Ptr(typ) = typ {
                         if let VariableType::Primitive(prim) = typ {
-                            registers.push(prim.clone());
-                            instructions.push(Instruction::Load { size: prim.ptr_element_size() as u8, destination: registers.len() as u16-1, address: reg });
+                            *stack_size += 8;
+                            instructions.push(Instruction::Load { size: (prim.ptr_element_size()/8) as u8, destination: *stack_size, address: offset });
+                            return Some((*stack_size, prim.clone()));
                         }
                         else { panic!(); }
                     }
                     else { panic!(); }
                 },
                 ASTunaryOperator::Address => {
-                    registers.push(RegisterType::Ptr(VariableType::Primitive(arena.alloc(t))));
-                    instructions.push(Instruction::AddrOf { source: reg, destination: registers.len() as u16-1 });
+                    let typ = RegisterType::Ptr(VariableType::Primitive(arena.alloc(typ)));
+                    *stack_size += 8;
+                    instructions.push(Instruction::AddrOf { source: offset, destination: *stack_size });
+                    return Some((*stack_size, typ));
                 },
             };
-            return Some(registers.len() as u16 - 1);
         },
         Expression::Cast { expr, typ } => {
             // TODO: pointer casts
 
-            let left_reg = lower_expression(expr, arena, registers, instructions, variables).unwrap();
-            let left_t = registers[left_reg as usize].clone();
+            let (offset, left_t) = lower_expression(expr, arena, stack_size, instructions, variables).unwrap();
 
             if left_t.is_none() { panic!(); }
 
@@ -734,7 +732,7 @@ fn lower_expression<'a, 'b>(
             let cast_type = RegisterType::from_str(*cast_type).unwrap();
             let cast_size = cast_type.size();
 
-            if matches!(left_t, RegisterType::Ptr(_))  {
+            if left_t.is_ptr() {
                 panic!();
             }
 
@@ -743,126 +741,133 @@ fn lower_expression<'a, 'b>(
             }
 
             if left_t == cast_type {
-                return Some(left_reg);
+                panic!();
             }
 
+            *stack_size += 8;
+
             if left_t.is_float() && cast_type.is_float() {
-                registers.push(cast_type);
                 instructions.push(Instruction::ExtendTruncate { 
                     typ: if left_t == RegisterType::F32 { ExtTruncType::Fextend } else { ExtTruncType::Ftruncate }, 
-                    source: left_reg, 
+                    source: offset, 
                     from_size: left_t.size(), 
-                    destination: registers.len() as u16 - 1, 
+                    destination: *stack_size, 
                     to_size: cast_size 
                 });
             }
             else if left_t.is_int() && cast_type.is_int() {
                 if left_t.size() == cast_type.size() {
-                    return Some(left_reg);
+                    instructions.push(Instruction::Move { source: offset, destination: *stack_size });
                 }
-                registers.push(cast_type);
-                instructions.push(Instruction::ExtendTruncate { 
-                    typ: if left_t.size() > cast_size { ExtTruncType::Truncate } else { 
-                        if left_t.is_signed() { ExtTruncType::SignExtend } else { ExtTruncType::ZeroExtend } }, 
-                    source: left_reg, 
-                    from_size: left_t.size(), 
-                    destination: registers.len() as u16 - 1, 
-                    to_size: cast_size 
-                });
+                else {
+                    instructions.push(Instruction::ExtendTruncate { 
+                        typ: if left_t.size() > cast_size { ExtTruncType::Truncate } else { 
+                            if left_t.is_signed() { ExtTruncType::SignExtend } else { ExtTruncType::ZeroExtend } }, 
+                        source: offset, 
+                        from_size: left_t.size(), 
+                        destination: *stack_size, 
+                        to_size: cast_size 
+                    });
+                }
             }
             else if left_t.is_float() && cast_type == RegisterType::Bool {
-                registers.push(left_t.clone());
                 instructions.push(Instruction::ImmediateFloat { 
                     typ: if left_t.size() == 32 { "f32" } else { "f64" }, 
-                    destination: registers.len() as u16 - 1, 
+                    destination: *stack_size, 
                     value: 0.0 
                 });
-                registers.push(RegisterType::Bool);
-
                 instructions.push(Instruction::BinaryOperation { 
                     size: left_t.size(), 
                     operation: IRbinaryOperator::FnotEq, 
-                    destination: registers.len() as u16 - 1, 
-                    left: left_reg, 
-                    right: registers.len() as u16 - 2 
+                    destination: *stack_size, 
+                    left: offset, 
+                    right: *stack_size 
                 }); 
             }
             else if left_t.is_int() && cast_type.is_float() {
-                registers.push(cast_type);
                 instructions.push(Instruction::Convert { 
                     typ: if left_t.is_signed() { ConvertType::SignedToFloat } else { ConvertType::UnsignedToFloat }, 
-                    source: left_reg, 
+                    source: offset, 
                     from_size: left_t.size(), 
-                    destination: registers.len() as u16 - 1, 
+                    destination: *stack_size, 
                     to_size: cast_size, 
                 });
             }
             else if left_t.is_float() && cast_type.is_int() {
-                let cast_is_signed = cast_type.is_signed();
-                registers.push(cast_type);
                 instructions.push(Instruction::Convert { 
-                    typ: if cast_is_signed { ConvertType::FloatToSigned } else { ConvertType::FloatToUnsigned }, 
-                    source: left_reg, 
+                    typ: if cast_type.is_signed() { ConvertType::FloatToSigned } else { ConvertType::FloatToUnsigned }, 
+                    source: offset, 
                     from_size: left_t.size(), 
-                    destination: registers.len() as u16 - 1, 
+                    destination: *stack_size, 
                     to_size: cast_size, 
                 });
             }
             else {
                 panic!();
             }
-            return Some(registers.len() as u16 - 1);
+            return Some((*stack_size, left_t));
         },
         Expression::Call { expr, parameters } => {
             let name = if let Expression::Name(name) = expr {
                 *name
             } else { panic!(); };
 
-            let register_paratemers: &mut [u16] = arena.alloc_array(0u16, parameters.len());
+            let register_paratemers: &mut [u32] = arena.alloc_array(0u32, parameters.len());
             let register_types = arena.alloc_array(RegisterType::None, parameters.len());
 
             for (i, par) in parameters.iter().enumerate() {
-                let register = lower_expression(par, arena, registers, instructions, variables).unwrap();
-                let expression_type = registers[register as usize].clone();
+                let (offset, expression_type) = lower_expression(par, arena, stack_size, instructions, variables).unwrap();
                 if expression_type.is_none() { panic!(); }
-                register_paratemers[i] = register;
+                register_paratemers[i] = offset;
                 register_types[i] = expression_type;
             }
 
-            registers.push(RegisterType::None);
+            *stack_size += 8;
             
             instructions.push(Instruction::Call ( 
                 arena.alloc((name, 
-                register_paratemers as &'b [u16],  
+                register_paratemers as &'b [u32],  
                 register_types as &'b [RegisterType],
-                registers.len() as u16 -1,
+                *stack_size,
                 RegisterType::None,
             ))));
-            return Some(registers.len() as u16 -1);
+            return Some((*stack_size, RegisterType::None));
         },
         Expression::Field { expr, field } => todo!(),
         Expression::ArrayInit(expressions) => {
-
-            let mut array_type = None;
-
-            let array_registers_start = registers.len();
-            for e in 0..expressions.len() {
-                registers.push(RegisterType::None);
+            if expressions.len() == 0 {
+                panic!();
             }
-            for (i, e) in expressions.iter().enumerate() {
-                let reg = lower_expression(e, arena, registers, instructions, variables)?;
-                let typ = registers[reg as usize].clone();
-                
-                match array_type.clone() {
-                    Some(t) => if t != typ { panic!(); },
-                    None => array_type = Some(typ.clone()),
+            
+            let (exp_offset, exp_type) = lower_expression(&expressions[0], arena, stack_size, instructions, variables).unwrap();
+            let mut array_type = exp_type;
+
+            *stack_size += (array_type.ptr_element_size()/8 * expressions.len() as u64) as u32;
+            *stack_size = stack_size.next_multiple_of(8);
+            let array_offset = *stack_size;
+
+            *stack_size += 8;
+            let ret_type = RegisterType::Ptr(VariableType::Primitive(arena.alloc(array_type.clone())));
+            instructions.push(Instruction::AddrOf { source: array_offset, destination: *stack_size });
+            let ptr_offset = *stack_size;
+
+            *stack_size += 8;
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: array_type.ptr_element_size() });
+            let element_size_offset = *stack_size;
+
+            instructions.push(Instruction::Store { size: array_type.ptr_element_size() as u8, source: exp_offset, address: ptr_offset });
+            
+            for (i, e) in expressions[1..].iter().enumerate() {
+                let (exp_offset, exp_type) = lower_expression(e, arena, stack_size, instructions, variables).unwrap();
+
+                if exp_type != array_type {
+                    panic!();
                 }
-
-                registers[array_registers_start + i] = typ;
-                instructions.push(Instruction::Move { source: reg, destination: (array_registers_start+i) as u16 });
+                
+                instructions.push(Instruction::BinaryOperation { size: 64, operation: IRbinaryOperator::Add, destination: ptr_offset, left: ptr_offset, right: element_size_offset });
+                instructions.push(Instruction::Store { size: array_type.ptr_element_size() as u8, source: exp_offset, address: ptr_offset });
             }
-            registers.push(RegisterType::Ptr(VariableType::Primitive(arena.alloc(array_type.unwrap()))));
-            return Some(registers.len() as u16-1);
+            return Some((ptr_offset, ret_type));
         },
         Expression::StructInit(items) => todo!(),
     }
@@ -885,46 +890,45 @@ fn insert_return<'a, 'b>(arena: &'b Arena, call: &mut VecArena<'b, Instruction<'
 fn lower_statement<'a, 'b>(
     statement: &Statement<'a, 'b>,
     arena: &'b Arena,
-    registers: &mut Vec<RegisterType<'a, 'b>>, 
+    stack_size: &mut u32, 
     blocks: &mut VecArena<Block<'a, 'b>>,
-    variables: &mut Vec<(&'a [u8], u16)>,
+    variables: &mut Vec<(&'a [u8], u32, RegisterType<'a, 'b>)>,
     return_type: Option<RegisterType<'a, 'b>>,
     last_loop_start: Option<i32>,
 ) -> Option<()> {
     match statement {
         Statement::Assignment { destination, value } => {
             let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let value_reg = lower_expression(value, arena, registers, instructions, variables).unwrap();
+            let (value_offset, value_type) = lower_expression(value, arena, stack_size, instructions, variables).unwrap();
 
             if let Some(d) = destination {
                 if let Expression::Name(n) = d {
-                    let dest_reg = variables.iter().find(|x| &x.0 == n).unwrap();
+                    let (_, dest_offset, dest_type) = variables.iter().find(|x| &x.0 == n).unwrap();
 
-                    if registers[value_reg as usize].is_none() { 
-                        registers[value_reg as usize] = registers[dest_reg.1 as usize].clone();
-                        insert_return(arena, instructions, registers[dest_reg.1 as usize].clone());
+                    if value_type.is_none() { 
+                        insert_return(arena, instructions, dest_type.clone());
                     }
 
-                    if registers[dest_reg.1 as usize] != registers[value_reg as usize] {
+                    if *dest_type != value_type {
                         panic!();
                     }
 
-                    instructions.push(Instruction::Move { source: value_reg, destination: dest_reg.1 });
+                    instructions.push(Instruction::Move { source: value_offset, destination: *dest_offset });
                 }
             }
         },
         Statement::Return { value } => {
             let instructions = &mut blocks.last_mut().unwrap().instructions;
             let value_reg = if let Some(v) = value {
-                let value_reg = lower_expression(v, arena, registers, instructions, variables).unwrap();
-                if registers[value_reg as usize].is_none() {
-                    registers[value_reg as usize] = return_type.clone().unwrap();
+                let (value_offset, value_type) = lower_expression(v, arena, stack_size, instructions, variables).unwrap();
+            
+                if value_type.is_none() {
                     insert_return(arena, instructions, return_type.clone().unwrap());
                 }
-                if return_type.is_none() || return_type.unwrap() != registers[value_reg as usize] {
+                if return_type.is_none() || return_type.unwrap() != value_type {
                     panic!();
                 }
-                Some(value_reg)
+                Some(value_offset)
             }
             else {
                 if return_type.is_some() {
@@ -937,34 +941,35 @@ fn lower_statement<'a, 'b>(
         },
         Statement::If { condition, body, else_body } => {
             let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let c = lower_expression(condition, arena, registers, instructions, variables).unwrap();
+            let (c_offset, mut c_type) = lower_expression(condition, arena, stack_size, instructions, variables).unwrap();
             
-            if registers[c as usize].is_none() {
-                registers[c as usize] = RegisterType::Bool;
+            if c_type.is_none() {
                 insert_return(arena, instructions, RegisterType::Bool);
+                c_type = RegisterType::Bool;
             }
-            if registers[c as usize] != RegisterType::Bool {
+            if c_type != RegisterType::Bool {
                 panic!();
             }
 
-            registers.push(RegisterType::Bool);
-            instructions.push(Instruction::Immediate { destination: registers.len() as u16 -1, value: 1 });
+            *stack_size += 8;
+
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: 1 });
             instructions.push(Instruction::BinaryOperation { 
                 size: 8, 
                 operation: IRbinaryOperator::Xor, 
-                destination: registers.len() as u16 -1, 
-                left: registers.len() as u16 -1, 
-                right: c, 
+                destination: *stack_size, 
+                left: *stack_size, 
+                right: c_offset, 
             });
 
-            let condition_reg= registers.len() as u16 -1;
+            let condition_reg = *stack_size;
             let condition_index = blocks.len()-1;
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, return_type.clone(), last_loop_start).unwrap();
+                lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), last_loop_start).unwrap();
             }
 
             variables.truncate(var_len);
@@ -984,7 +989,7 @@ fn lower_statement<'a, 'b>(
                 let var_len = variables.len();
 
                 for s in *e {
-                    lower_statement(s, arena, registers, blocks, variables, return_type.clone(), last_loop_start).unwrap();
+                    lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), last_loop_start).unwrap();
                 }
 
                 while variables.len() > var_len {
@@ -1005,34 +1010,35 @@ fn lower_statement<'a, 'b>(
             let condition_block_index = blocks.len()-1;
 
             let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let c = lower_expression(condition, arena, registers, instructions, variables).unwrap();
+            let (c_offset, mut c_type) = lower_expression(condition, arena, stack_size, instructions, variables).unwrap();
 
-            if registers[c as usize].is_none() {
-                registers[c as usize] = RegisterType::Bool;
+            if c_type.is_none() {
                 insert_return(arena, instructions, RegisterType::Bool);
+                c_type = RegisterType::Bool;
             }
-            if registers[c as usize] != RegisterType::Bool {
+            if c_type != RegisterType::Bool {
                 panic!();
             }
 
-            registers.push(RegisterType::Bool);
-            instructions.push(Instruction::Immediate { destination: registers.len() as u16 -1, value: 1 });
+            *stack_size += 8;
+
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: 1 });
             instructions.push(Instruction::BinaryOperation { 
                 size: 8, 
                 operation: IRbinaryOperator::Xor, 
-                destination: registers.len() as u16 -1, 
-                left: registers.len() as u16 -1, 
-                right: c, 
+                destination: *stack_size, 
+                left: *stack_size, 
+                right: c_offset, 
             });
 
-            let condition_reg= registers.len() as u16 -1;
+            let condition_reg = *stack_size;
 
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, return_type.clone(), Some(condition_block_index as i32)).unwrap();
+                lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), Some(condition_block_index as i32)).unwrap();
             }
 
             while variables.len() > var_len {
@@ -1064,32 +1070,32 @@ fn lower_statement<'a, 'b>(
             let Type::Name(var_type) = typ else { panic!(); };
             let reg_t = RegisterType::from_str(*var_type).unwrap();
 
-            if let Some(v) = value {
-                let value_reg = lower_expression(v, arena, registers, instructions, variables).unwrap();
-                
-                if registers[value_reg as usize].is_none() {
-                    registers[value_reg as usize] = reg_t.clone();
-                    insert_return(arena, instructions, reg_t.clone());
-                }
-                if registers[value_reg as usize] != reg_t {
-                    panic!();
-                }
-            }
-            else {
-                registers.push(reg_t);
-            }
-
-            if variables.iter().find(|x| &x.0 == name).is_some() {
+            if variables.iter().rev().find(|x| &x.0 == name).is_some() {
                 panic!();
             }
 
-            variables.push((name, registers.len() as u16 -1));
+            if let Some(v) = value {
+                let (value_offset, mut value_type) = lower_expression(v, arena, stack_size, instructions, variables).unwrap();
+                
+                if value_type.is_none() {
+                    insert_return(arena, instructions, reg_t.clone());
+                    value_type = reg_t.clone();
+                }
+                if value_type != reg_t {
+                    panic!();
+                }
+                variables.push((name, value_offset, reg_t));
+            }
+            else {
+                *stack_size += 8;
+                variables.push((name, *stack_size, reg_t));
+            }
         },
         Statement::For { declaration, condition, iteration, body } => {
             let var_len = variables.len();
 
             if let Some(d) = declaration {
-                lower_statement(d, arena, registers, blocks, variables, return_type.clone(), last_loop_start).unwrap();
+                lower_statement(d, arena, stack_size, blocks, variables, return_type.clone(), last_loop_start).unwrap();
             }
             
             blocks.push(Block { instructions: arena.vec_capacity(16) });
@@ -1097,38 +1103,39 @@ fn lower_statement<'a, 'b>(
 
             let instructions = &mut blocks.last_mut().unwrap().instructions;
             let condition_reg = if let Some(cond) = condition {
-                let c = lower_expression(cond, arena, registers, instructions, variables).unwrap();
+                let (c_offset, mut c_type) = lower_expression(cond, arena, stack_size, instructions, variables).unwrap();
 
-                if registers[c as usize].is_none() {
-                    registers[c as usize] = RegisterType::Bool;
+                if c_type.is_none() {
+                    c_type = RegisterType::Bool;
                     insert_return(arena, instructions, RegisterType::Bool);
                 }
-                if registers[c as usize] != RegisterType::Bool {
+                if c_type != RegisterType::Bool {
                     panic!();
                 }
 
-                registers.push(RegisterType::Bool);
-                instructions.push(Instruction::Immediate { destination: registers.len() as u16 -1, value: 1 });
+                *stack_size += 8;
+
+                instructions.push(Instruction::Immediate { destination: *stack_size, value: 1 });
                 instructions.push(Instruction::BinaryOperation { 
                     size: 8, 
                     operation: IRbinaryOperator::Xor, 
-                    destination: registers.len() as u16 -1, 
-                    left: registers.len() as u16 -1, 
-                    right: c, 
+                    destination: *stack_size, 
+                    left: *stack_size, 
+                    right: c_offset, 
                 });
 
-                Some(registers.len() as u16 -1)
+                Some(*stack_size)
             }
             else { None };
             
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, return_type.clone(), Some(condition_block_index as i32)).unwrap();
+                lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), Some(condition_block_index as i32)).unwrap();
             }
 
             if let Some(ite) = iteration {
-                lower_statement(ite, arena, registers, blocks, variables, return_type.clone(), Some(condition_block_index as i32)).unwrap();
+                lower_statement(ite, arena, stack_size, blocks, variables, return_type.clone(), Some(condition_block_index as i32)).unwrap();
             }
 
             while variables.len() > var_len {
@@ -1162,7 +1169,7 @@ fn lower_statement<'a, 'b>(
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, registers, blocks, variables, return_type.clone(), Some(start_block_index as i32)).unwrap();
+                lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), Some(start_block_index as i32)).unwrap();
             }
 
             while variables.len() > var_len {
@@ -1170,20 +1177,20 @@ fn lower_statement<'a, 'b>(
             }
 
             let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let c = lower_expression(condition, arena, registers, instructions, variables).unwrap();
+            let (c_offset, mut c_type) = lower_expression(condition, arena, stack_size, instructions, variables).unwrap();
 
-            if registers[c as usize].is_none() {
-                registers[c as usize] = RegisterType::Bool;
+            if c_type.is_none() {
+                c_type = RegisterType::Bool;
                 insert_return(arena, instructions, RegisterType::Bool);
             }
-            if registers[c as usize] != RegisterType::Bool {
+            if c_type != RegisterType::Bool {
                 panic!();
             }
 
             let next_block_index = blocks.len();
 
             blocks.get_mut(start_block_index).unwrap().instructions.push(Instruction::Branch { 
-                condition: c, 
+                condition: c_offset, 
                 label: next_block_index as i32, 
             });
 
