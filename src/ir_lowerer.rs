@@ -403,6 +403,7 @@ fn lower_expression<'a, 'b, 'c>(
                     }
                     else {
                         if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
+                            println!("AAA LEFT: {:?}, RIGHT: {:?}", left_type, right_type);
                             panic!();
                         }
 
@@ -595,12 +596,13 @@ fn lower_expression<'a, 'b, 'c>(
                 },
                 ASTbinaryOperator::NotEq => {
                     if left_type != right_type {
+                        println!("LEFT: {:?}, RIGHT: {:?}", left_type, right_type);
                         panic!();
                     }
 
                     let op = match left_type.is_float() {
                         true => IRbinaryOperator::FnotEq,
-                        false => IRbinaryOperator::FnotEq,
+                        false => IRbinaryOperator::NotEq,
                     };
                     (op, RegisterType::Bool, left_type.size())
                 },
@@ -671,10 +673,10 @@ fn lower_expression<'a, 'b, 'c>(
                     return Some((*stack_size, typ));
                 },
                 ASTunaryOperator::Dereference => {
-                    if let RegisterType::Ptr(typ) = typ {
-                        if let VariableType::Primitive(prim) = typ {
+                    if let RegisterType::Ptr(var_typ) = typ.clone() {
+                        if let VariableType::Primitive(prim) = var_typ {
                             *stack_size += 8;
-                            instructions.push(Instruction::Load { size: (prim.ptr_element_size()/8) as u8, destination: *stack_size, address: offset });
+                            instructions.push(Instruction::Load { size: (typ.ptr_element_size()) as u8, destination: *stack_size, address: offset });
                             return Some((*stack_size, prim.clone()));
                         }
                         else { panic!(); }

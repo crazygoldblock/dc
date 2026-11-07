@@ -72,7 +72,7 @@ impl<'a> Tokenizer<'a> {
                         self.state = State::BlockComment{ depth: 0 };
                         continue;
                     }
-                    if b"*/:=;->(){},#[]+-.".contains(&current) {
+                    if b"*/:=;->(){},#[]+-.!".contains(&current) {
                         if let Some(n) = next {
                             if (current == b'&' && *n == b'&') || (current == b'|' && *n == b'|') ||
                                 (current == b'<' && (*n == b'<' || *n == b'=')) ||
@@ -122,7 +122,7 @@ impl<'a> Tokenizer<'a> {
                     self.index += 1;
                 },
                 State::Name{ start } => {
-                    if b" \r\n*/:=;->(){},#[]+-.".contains(&current) {
+                    if b" \r\n*/:=;->(){},#[]+-.!".contains(&current) {
                         self.state = State::Start;
                         self.last = &self.buffer[start..self.index];
                         return Ok(Token{ token: &self.buffer[start..self.index]});
