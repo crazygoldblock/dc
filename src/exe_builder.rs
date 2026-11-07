@@ -3,7 +3,7 @@
 use std::{ffi::OsString, fs::{File, write}, io::Write};
 
 pub fn build(
-    instructions: &mut [u8], 
+    instructions: &mut Vec<u8>, 
     output_path: &str,
 ) {
     let buffer = Vec::new();
@@ -12,6 +12,10 @@ pub fn build(
     let buffer = build_idata_section(buffer);
 
     write(output_path, buffer).unwrap();
+
+    while instructions.len() % 512 != 0 {
+        instructions.push(0xC3);
+    }
 
     File::options().append(true).open(output_path).unwrap().write(instructions);
 }
@@ -33,15 +37,15 @@ fn build_header(vec: Vec<u8>, code_size: u32) -> Vec<u8> {
     builder.push_u32_le(0); // pointer to symbol table
     builder.push_u32_le(0); // number of symbols
     builder.push_u16_le(240); // size of optional header
-    builder.push_u16_le(0x22); // characteristics
+    builder.push_u16_le(0x23); // characteristics
     assert_eq!(builder.len(), 64 + 24);
 
     // optional header
     builder.push_u16_le(0x20B); // magic PE32+
     builder.push_u8_le(0); // linker major version
     builder.push_u8_le(0); // linker minor version
-    builder.push_u32_le(code_size); // size of code section
-    builder.push_u32_le(0); // size of data section
+    builder.push_u32_le(code_size.next_multiple_of(512)); // size of code section
+    builder.push_u32_le(0x200); // size of data section
     builder.push_u32_le(0); // size of uninit data section
     builder.push_u32_le(0x2000); // address of entry point
     builder.push_u32_le(0x2000); // base of code
@@ -77,30 +81,17 @@ fn build_header(vec: Vec<u8>, code_size: u32) -> Vec<u8> {
             1 => {
                 // Import directory
                 builder.push_u32_le(0x1000);
-                builder.push_u32_le(48);
+                builder.push_u32_le(40);
             }
             12 => {
                 // Import Address Table
-                builder.push_u32_le(0x1048);
+                builder.push_u32_le(0x1050);
                 builder.push_u32_le(40);
             }
             _ => builder.push_u64_le(0),
         }
     }
     assert_eq!(builder.len(), 64 + 24 + 240);
-
-    // text section header
-    builder.push_slice(b".text\0\0\0"); // name
-    builder.push_u32_le(code_size); // virtual size
-    builder.push_u32_le(0x2000); // virtual address
-    builder.push_u32_le(code_size); // size of raw data
-    builder.push_u32_le(0x400); // pointer to raw data
-    builder.push_u32_le(0); // pointer to relocations
-    builder.push_u32_le(0); // pointer to line numbers
-    builder.push_u16_le(0); // number of relocations
-    builder.push_u16_le(0); // number of line numbers 
-    builder.push_u32_le(0x60000020); // characteristics
-    assert_eq!(builder.len(), 64 + 24 + 240 + 40);
 
     builder.push_slice(b".idata\0\0");
     builder.push_u32_le(0xC2);        // VirtualSize
@@ -112,6 +103,19 @@ fn build_header(vec: Vec<u8>, code_size: u32) -> Vec<u8> {
     builder.push_u16_le(0);
     builder.push_u16_le(0);
     builder.push_u32_le(0xC0000040);  // Initialized data, read, write
+    assert_eq!(builder.len(), 64 + 24 + 240 + 40);
+
+    // text section header
+    builder.push_slice(b".text\0\0\0"); // name
+    builder.push_u32_le(code_size); // virtual size
+    builder.push_u32_le(0x2000); // virtual address
+    builder.push_u32_le(code_size.next_multiple_of(512)); // size of raw data
+    builder.push_u32_le(0x400); // pointer to raw data
+    builder.push_u32_le(0); // pointer to relocations
+    builder.push_u32_le(0); // pointer to line numbers
+    builder.push_u16_le(0); // number of relocations
+    builder.push_u16_le(0); // number of line numbers 
+    builder.push_u32_le(0x60000020); // characteristics
 
     // alignment
     builder.push_slice(&[0; 104]);

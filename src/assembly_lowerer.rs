@@ -687,14 +687,14 @@ pub fn lower_function<'b>(
                     // call rax
                     instructions.extend_from_slice(&[0xFF, 0xD0]);
                     
-                    store(instructions, *ret, Register::Rax, &mut stack_size);
-                    
                     // add rsp [parameters*8]
                     instructions.extend_from_slice(&[0x48, 0x81, 0xC4]);
                     instructions.extend_from_slice(&(parameters.len() as u32 * 8).to_le_bytes());
- 
+
                     // pop rbp
                     instructions.push(0x5D);
+
+                    store(instructions, *ret, Register::Rax, &mut stack_size);
                 },
                 Instruction::Return { value } => {
                     if let Some(value) = value {

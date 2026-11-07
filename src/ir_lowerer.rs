@@ -770,7 +770,7 @@ fn lower_expression<'a, 'b, 'c>(
             else {
                 panic!();
             }
-            return Some((*stack_size, left_t));
+            return Some((*stack_size, cast_type));
         },
         Expression::Call { name, parameters } => {
             let register_paratemers = arena.alloc_array(0u32, parameters.len());
@@ -780,7 +780,8 @@ fn lower_expression<'a, 'b, 'c>(
                 let (offset, expression_type) = lower_expression(par, arena, stack_size, instructions, variables, functions).unwrap();
                 register_paratemers[i] = offset;
             
-                if type_to_register(&function.parameters[i].0, arena) != expression_type {
+                let this_type = type_to_register(&function.parameters[i].0, arena);
+                if this_type != expression_type {
                     panic!();
                 }  
             }

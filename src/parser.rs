@@ -359,10 +359,7 @@ fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena,
         }
     }
 
-    if tokens.peek()? == ")" {
-        if *bracket_depth == 0 {
-            return Err(ParseError::UnOpenedBrackets { line: tokens.get_current_line() });
-        }
+    if tokens.peek()? == ")" && *bracket_depth > 0 {
         tokens.next();
         *bracket_depth -= 1;
         return Ok(left);

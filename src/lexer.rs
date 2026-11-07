@@ -21,6 +21,7 @@ impl<'a> PartialEq<&str> for Token<'a> {
         self.token == other.as_bytes()
     }
 }
+#[derive(Debug)]
 pub enum TokenError<'a> {
     EndOfFile(&'a str),
 }
