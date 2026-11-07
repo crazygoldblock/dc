@@ -43,6 +43,14 @@ impl Arena {
             }
         }
     }
+    pub fn alloc_slice<'a, T: Copy>(&'a self, slice: &[T]) -> &'a mut [T] {
+        unsafe {
+            let ptr = alloc(Layout::from_size_align(size_of::<T>() * slice.len(), align_of::<T>()).unwrap()) as *mut T;
+            copy_nonoverlapping(slice.as_ptr(), ptr, slice.len());
+
+            from_raw_parts_mut(ptr, slice.len())
+        }
+    }
 }
 pub struct VecArena<'a, T> {
     arena: &'a Arena,
@@ -69,7 +77,7 @@ impl<'a, T> VecArena<'a, T> {
             from_raw_parts(self.buffer, self.len)
         }
     }
-    pub fn last_mut(&mut self) -> Option<&mut T> {
+    pub fn last_mut(&mut self) -> Option<&'a mut T> {
         if self.len == 0 {
             None
         }
@@ -79,7 +87,7 @@ impl<'a, T> VecArena<'a, T> {
             }   
         }
     }
-    pub fn last(&self) -> Option<&T> {
+    pub fn last(&self) -> Option<&'a T> {
         if self.len == 0 {
             None
         }

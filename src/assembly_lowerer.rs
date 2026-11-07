@@ -6,17 +6,16 @@ use crate::ir_lowerer::Instruction;
 use crate::ir_lowerer::IRbinaryOperator;
 use crate::ir_lowerer::ExtTruncType;
 use crate::ir_lowerer::ConvertType;
-use crate::ir_lowerer::RegisterType;
 
 // rbp = start rsp
 // jump into last nonexistent block
 
-pub fn lower_function<'a, 'b>(
-    function: &IRfunction<'a, 'b>,
+pub fn lower_function<'b>(
+    function: &IRfunction,
     instructions: &mut Vec<u8>,
     arena: &'b Arena,
-) -> Option<&'b [(&'a [u8], RegisterType<'a, 'b>, &'b [RegisterType<'a, 'b>], usize)]> {
-    let mut var_count = function.paramaters.len() + 1;
+) -> Option<&'b [(&'b [u8], usize)]> {
+    let mut stack_size = function.paramaters_count as u32 * 8 + 8;
 
     let mut jumps = Vec::new();
     let mut labels = Vec::new();
@@ -25,10 +24,10 @@ pub fn lower_function<'a, 'b>(
     instructions.extend_from_slice(&[
         // mov rbp, rsp
         0x48, 0x89, 0xE5,
-        // add rbp, [8*parameter_count+1]
+        // add rbp, [stack_size]
         0x48, 0x81, 0xC5
     ]);
-    instructions.extend_from_slice(&( (function.paramaters.len() as u32 + 1) * 8).to_le_bytes());
+    instructions.extend_from_slice(&stack_size.to_le_bytes());
 
     for b in function.blocks {
         labels.push(instructions.len() as u32);
@@ -40,30 +39,27 @@ pub fn lower_function<'a, 'b>(
                     instructions.extend_from_slice(&[0x48, 0xB8]);
                     instructions.extend_from_slice(&value.to_le_bytes());
                     
-                    store(instructions, *destination, Register::Rax, &mut var_count);
+                    store(instructions, *destination, Register::Rax, &mut stack_size);
                 },
                 Instruction::ImmediateFloat { typ, destination, value } => {
-                    if *destination as usize > var_count {
-                        panic!();
-                    }
                     if *typ == "f64" {
                         // mov rax [value]
                         instructions.extend_from_slice(&[0x48, 0xB8]);
                         instructions.extend_from_slice(&value.to_le_bytes());
                     
-                        store(instructions, *destination, Register::Rax, &mut var_count);
+                        store(instructions, *destination, Register::Rax, &mut stack_size);
                     }
                     else if *typ == "f32" {
                         // mov eax [value]
                         instructions.push(0xB8);
                         instructions.extend_from_slice(&(*value as f32).to_le_bytes());
 
-                        store(instructions, *destination, Register::Rax, &mut var_count);
+                        store(instructions, *destination, Register::Rax, &mut stack_size);
                     }
                     else { panic!(); }
                 },
                 Instruction::Load { size, destination, address } => {
-                    load(instructions, *address, Register::Rax, var_count);
+                    load(instructions, *address, Register::Rax, stack_size);
 
                     match size {
                         // mov rax, [rax]
@@ -73,11 +69,11 @@ pub fn lower_function<'a, 'b>(
                         8 => instructions.extend_from_slice(&[0x8A, 0x00]),
                         _ => panic!(),
                     }
-                    store(instructions, *destination, Register::Rax, &mut var_count);
+                    store(instructions, *destination, Register::Rax, &mut stack_size);
                 },
                 Instruction::Store { size, source, address } => {
-                    load(instructions, *address, Register::Rax, var_count);
-                    load(instructions, *source, Register::Rbx, var_count);
+                    load(instructions, *address, Register::Rax, stack_size);
+                    load(instructions, *source, Register::Rbx, stack_size);
 
                     match size {
                         // mov [rax], rbx
@@ -91,18 +87,18 @@ pub fn lower_function<'a, 'b>(
                 Instruction::BinaryOperation { size, operation, destination, left, right } => {
                     if operation.is_float() {
                         if *size == 32 {
-                            load(instructions, *left, Register::Xmm0, var_count);
-                            load(instructions, *right, Register::Xmm1, var_count);
+                            load(instructions, *left, Register::Xmm0, stack_size);
+                            load(instructions, *right, Register::Xmm1, stack_size);
                         }
                         else if *size == 64 {
-                            load(instructions, *left, Register::Xmm0d, var_count);
-                            load(instructions, *right, Register::Xmm1d, var_count);
+                            load(instructions, *left, Register::Xmm0d, stack_size);
+                            load(instructions, *right, Register::Xmm1d, stack_size);
                         }
                         else { panic!(); }
                     }
                     else {
-                        load(instructions, *left, Register::Rax, var_count);
-                        load(instructions, *right, Register::Rbx, var_count);
+                        load(instructions, *left, Register::Rax, stack_size);
+                        load(instructions, *right, Register::Rbx, stack_size);
                     }
 
                     match operation {
@@ -662,34 +658,34 @@ pub fn lower_function<'a, 'b>(
                         IRbinaryOperator::Frem => todo!(),
                     }
                     if operation.is_int() || (operation.is_float() && operation.is_comparison()) {    
-                        store(instructions, *destination, Register::Rax, &mut var_count);
+                        store(instructions, *destination, Register::Rax, &mut stack_size);
                     }
                     else if operation.is_float() {
                         if *size == 32 {
-                            store(instructions, *destination, Register::Xmm0, &mut var_count);
+                            store(instructions, *destination, Register::Xmm0, &mut stack_size);
                         }
                         else if *size == 64 {
-                            store(instructions, *destination, Register::Xmm0d, &mut var_count);
+                            store(instructions, *destination, Register::Xmm0d, &mut stack_size);
                         }
                         else { panic!(); }
                     }
                     else { panic!(); }
                 },
-                Instruction::Call((name, parameters, parameter_types, ret, return_type)) => {
+                Instruction::Call((name, parameters, ret)) => {
                     // push rbp
                     instructions.push(0x55);
 
                     for par in *parameters {
-                        load(instructions, *par, Register::Rax, var_count);
+                        load(instructions, *par, Register::Rax, stack_size);
                         // push rax
                         instructions.push(0x50);
                     }
                     // call [rip + offset]
                     instructions.extend_from_slice(&[0xFF, 0x15]);
-                    function_calls.push((*name, return_type.clone(), *parameter_types, instructions.len()));
+                    function_calls.push((arena.alloc_slice(*name) as &[u8], instructions.len()));
                     instructions.extend_from_slice(&0u32.to_le_bytes());
                     
-                    store(instructions, *ret, Register::Rax, &mut var_count);
+                    store(instructions, *ret, Register::Rax, &mut stack_size);
                     
                     // add rsp [parameters*8]
                     instructions.extend_from_slice(&[0x48, 0x81, 0xC4]);
@@ -700,11 +696,11 @@ pub fn lower_function<'a, 'b>(
                 },
                 Instruction::Return { value } => {
                     if let Some(value) = value {
-                        load(instructions, *value, Register::Rax, var_count);
+                        load(instructions, *value, Register::Rax, stack_size);
                     }
                     // sub rbp, [8*parameter_count+1]
                     instructions.extend_from_slice(&[0x48, 0x81, 0xED]);
-                    instructions.extend_from_slice(&( (function.paramaters.len() as u32 + 1) * 8).to_le_bytes());
+                    instructions.extend_from_slice(&( (function.paramaters_count as u32 + 1) * 8).to_le_bytes());
 
                     instructions.extend_from_slice(&[
                         // move rsp, rbp
@@ -714,7 +710,7 @@ pub fn lower_function<'a, 'b>(
                     ]);
                 },
                 Instruction::Branch { condition, label } => {
-                    load(instructions, *condition, Register::Rax, var_count);
+                    load(instructions, *condition, Register::Rax, stack_size);
                     instructions.extend_from_slice(&[
                         // cmp rax, 1
                         0x48, 0x83, 0xF8, 0x01,
@@ -736,7 +732,7 @@ pub fn lower_function<'a, 'b>(
                 Instruction::ExtendTruncate { typ, source, from_size, destination, to_size } => {
                     match typ {
                         ExtTruncType::ZeroExtend => {
-                            load(instructions, *source, Register::Rax, var_count);
+                            load(instructions, *source, Register::Rax, stack_size);
                             match (from_size, to_size) {
                                 // movsx ax, al
                                 (8, 16) => instructions.extend_from_slice(&[0x66, 0x0F, 0xB6, 0xC0]),
@@ -747,10 +743,10 @@ pub fn lower_function<'a, 'b>(
                                 (32, 64) => instructions.extend_from_slice(&[0x89, 0xC0]),
                                 _ => panic!(),
                             }
-                            store(instructions, *destination, Register::Rax, &mut var_count);
+                            store(instructions, *destination, Register::Rax, &mut stack_size);
                         },
                         ExtTruncType::SignExtend => {
-                            load(instructions, *source, Register::Rax, var_count);
+                            load(instructions, *source, Register::Rax, stack_size);
                             match (from_size, to_size) {
                                 // movsx ax, al
                                 (8, 16) => instructions.extend_from_slice(&[0x66, 0x0F, 0xBE, 0xC0]),
@@ -761,29 +757,29 @@ pub fn lower_function<'a, 'b>(
                                 (32, 64) => instructions.extend_from_slice(&[0x48, 0x63, 0xC0]),
                                 _ => panic!(),
                             }
-                            store(instructions, *destination, Register::Rax, &mut var_count);
+                            store(instructions, *destination, Register::Rax, &mut stack_size);
                         },
                         ExtTruncType::Fextend => {
-                            load(instructions, *source, Register::Xmm0, var_count);
+                            load(instructions, *source, Register::Xmm0, stack_size);
                             match (from_size, to_size) {
                                 // cvtss2sd xmm0, xmm0
                                 (32, 64) => instructions.extend_from_slice(&[0xF3, 0x0F, 0x5A, 0xC0]),
                                 _ => panic!(),
                             }
-                            store(instructions, *destination, Register::Xmm0d, &mut var_count);
+                            store(instructions, *destination, Register::Xmm0d, &mut stack_size);
                         },
                         ExtTruncType::Truncate => {
-                            load(instructions, *source, Register::Rax, var_count);
-                            store(instructions, *destination, Register::Rax, &mut var_count);
+                            load(instructions, *source, Register::Rax, stack_size);
+                            store(instructions, *destination, Register::Rax, &mut stack_size);
                         },
                         ExtTruncType::Ftruncate => {
-                            load(instructions, *source, Register::Xmm0d, var_count);
+                            load(instructions, *source, Register::Xmm0d, stack_size);
                             match (from_size, to_size) {
                                 // cvtsd2ss xmm0, xmm0
                                 (64, 32) => instructions.extend_from_slice(&[0xF2, 0x0F, 0x5A, 0xC0]),
                                 _ => panic!(),
                             }
-                            store(instructions, *destination, Register::Xmm0, &mut var_count);
+                            store(instructions, *destination, Register::Xmm0, &mut stack_size);
                         },
                     }
                 },
@@ -791,38 +787,38 @@ pub fn lower_function<'a, 'b>(
                     match typ {
                         ConvertType::FloatToUnsigned | ConvertType::FloatToSigned => {
                             if  *from_size == 32 {
-                                load(instructions, *source, Register::Xmm0, var_count);
+                                load(instructions, *source, Register::Xmm0, stack_size);
                                 // cvttss2si rax, xmm0
                                 instructions.extend_from_slice(&[0xF3, 0x48, 0x0F, 0x2C, 0xC0]);
                             }
                             else if *from_size == 64 {
-                                load(instructions, *source, Register::Xmm0d, var_count);
+                                load(instructions, *source, Register::Xmm0d, stack_size);
                                 // cvttsd2si rax, xmm0
                                 instructions.extend_from_slice(&[0xF2, 0x48, 0x0F, 0x2C, 0xC0]);
                             }
                             else { panic!(); }
 
-                            store(instructions, *destination, Register::Rax, &mut var_count);
+                            store(instructions, *destination, Register::Rax, &mut stack_size);
                         },
                         ConvertType::SignedToFloat | ConvertType::UnsignedToFloat => {
-                            load(instructions, *source, Register::Rax, var_count);
+                            load(instructions, *source, Register::Rax, stack_size);
                             if  *to_size == 32 {
                                 // cvtsi2ss xmm0, rax
                                 instructions.extend_from_slice(&[0xF3, 0x48, 0x0F, 0x2A, 0xC0]);
-                                store(instructions, *destination, Register::Xmm0, &mut var_count);
+                                store(instructions, *destination, Register::Xmm0, &mut stack_size);
                             }
                             else if *from_size == 64 {
                                 // cvtsi2sd xmm0, rax
                                 instructions.extend_from_slice(&[0xF2, 0x48, 0x0F, 0x2A, 0xC0]);
-                                store(instructions, *destination, Register::Xmm0d, &mut var_count);
+                                store(instructions, *destination, Register::Xmm0d, &mut stack_size);
                             }
                             else { panic!(); }
                         },
                     }
                 },
                 Instruction::Move { source, destination } => {
-                    load(instructions, *source, Register::Rax, var_count);
-                    store(instructions, *destination, Register::Rax, &mut var_count);
+                    load(instructions, *source, Register::Rax, stack_size);
+                    store(instructions, *destination, Register::Rax, &mut stack_size);
                 },
                 Instruction::LoadGlobal {  } => todo!(),
                 Instruction::StoreGlobal {  } => todo!(),
@@ -831,33 +827,10 @@ pub fn lower_function<'a, 'b>(
                     instructions.extend_from_slice(&[0x48, 0x8D, 0x85]);
                     instructions.extend_from_slice(&( -8*(*source as i32 + 1) ).to_le_bytes());
 
-                    store(instructions, *destination, Register::Rax, &mut var_count);
+                    store(instructions, *destination, Register::Rax, &mut stack_size);
                 },
             }
         }
-    }
-
-    if function.return_type.is_none() {
-        labels.push(instructions.len() as u32);
-    }
-    
-
-    if function.return_type.is_some()  {
-        if !matches!(function.blocks.last().unwrap().instructions.last().unwrap(), Instruction::Return{value: _}) {
-            panic!();
-        }
-    }
-    else {
-        // sub rbp, [8*parameter_count+1]
-        instructions.extend_from_slice(&[0x48, 0x81, 0xED]);
-        instructions.extend_from_slice(&( (function.paramaters.len() as u32 + 1) * 8).to_le_bytes());
-
-        instructions.extend_from_slice(&[
-            // move rsp, rbp
-            0x48, 0x89, 0xEC,
-            // ret
-            0xC3,
-        ]);
     }
 
     for (jmp, label) in jumps {
@@ -867,8 +840,8 @@ pub fn lower_function<'a, 'b>(
 
     Some(function_calls.array())
 }
-fn load(instructions: &mut Vec<u8>, source: u32, register: Register, var_count: usize) {
-    if source as usize >= var_count {
+fn load(instructions: &mut Vec<u8>, source: u32, register: Register, stack_size: u32) {
+    if source > stack_size {
         panic!();
     }
     match register {
@@ -899,14 +872,14 @@ fn load(instructions: &mut Vec<u8>, source: u32, register: Register, var_count: 
     }
     instructions.extend_from_slice(&(-(source as i32)).to_le_bytes());
 }
-fn store(instructions: &mut Vec<u8>, destination: u32, register: Register, var_count: &mut usize) {
-    if destination as usize > *var_count {
+fn store(instructions: &mut Vec<u8>, destination: u32, register: Register, stack_size: &mut u32) {
+    if destination > *stack_size + 8 {
         panic!();
     }
-    if destination as usize == *var_count {
+    if destination == *stack_size + 8 {
         // sub rsp, 8
         instructions.extend_from_slice(&[0x48, 0x83, 0xEC, 0x08]);
-        *var_count += 1;
+        *stack_size += 8;
     }
     match register {
         Register::Rax => {

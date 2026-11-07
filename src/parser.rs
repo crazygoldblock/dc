@@ -15,7 +15,7 @@ pub enum Expression<'a, 'b> {
     Bool(bool),
     Name(&'a [u8]),
     Call{
-        expr: &'b Expression<'a, 'b>,
+        name: &'a [u8],
         parameters: &'b [Expression<'a, 'b>], 
     },
     BinaryOperator{
@@ -78,7 +78,6 @@ pub enum ASTunaryOperator {
 pub enum Type<'a, 'b> {
     Name(&'a [u8]),
     Pointer(&'b Type<'a, 'b>),
-    Array(&'b Type<'a, 'b>, Expression<'a, 'b>),
 }
 #[derive(Clone, Debug)]
 pub enum Statement<'a, 'b> {
@@ -307,16 +306,6 @@ fn parse_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Ty
         tokens.next()?;
         return Ok(Type::Pointer(arena.alloc(parse_type(tokens, arena)?)));
     }
-    if tokens.peek()? == "[" {
-        tokens.next()?;
-        let t = arena.alloc(parse_type(tokens, arena)?);
-        
-        expect_symbol(tokens, ";")?;
-        let len = parse_expression(tokens, arena)?;
-        expect_symbol(tokens, "]")?;
-
-        return Ok(Type::Array(t, len));
-    }
     return Ok(Type::Name(next_identifier(tokens)?));
 }
 fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Expression<'a, 'b>, ParseError<'a>> {
@@ -466,25 +455,27 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result
         return Ok(Expression::Bool(false));
     }
 
-    let mut expr = Expression::Name(next_identifier(tokens)?);
+    let identifier = next_identifier(tokens)?;
+    let mut expr = Expression::Name(identifier);
+
+    if tokens.peek()? == "(" {
+        tokens.next();
+        let mut parameters = arena.vec_capacity(16);
+
+        while tokens.peek()? != ")" {
+            parameters.push(parse_expression(tokens, arena)?);
+            if tokens.peek()? == "," { tokens.next(); }
+        }
+        tokens.next()?;
+ 
+        expr = Expression::Call {
+            name: identifier,
+            parameters: parameters.array(),
+        };
+    } 
 
     loop {
-        if tokens.peek()? == "(" {
-            tokens.next();
-            let mut parameters = arena.vec_capacity(16);
-
-            while tokens.peek()? != ")" {
-                parameters.push(parse_expression(tokens, arena)?);
-                if tokens.peek()? == "," { tokens.next(); }
-            }
-            tokens.next()?;
- 
-            expr = Expression::Call {
-                expr: arena.alloc(expr),
-                parameters: parameters.array(),
-            };
-        } 
-        else if tokens.peek()? == "." {
+        if tokens.peek()? == "." {
             tokens.next();
 
             expr = Expression::Field {
