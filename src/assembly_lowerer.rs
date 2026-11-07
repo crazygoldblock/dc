@@ -14,12 +14,12 @@ pub fn lower_function<'b>(
     function: &IRfunction,
     instructions: &mut Vec<u8>,
     arena: &'b Arena,
-) -> Option<&'b [(&'b [u8], usize)]> {
+    function_calls: &mut Vec<(&'b [u8], usize)>,
+) -> Option<()> {
     let mut stack_size = function.paramaters_count as u32 * 8 + 8;
 
     let mut jumps = Vec::new();
     let mut labels = Vec::new();
-    let mut function_calls = arena.vec_capacity(8);
 
     instructions.extend_from_slice(&[
         // mov rbp, rsp
@@ -680,10 +680,12 @@ pub fn lower_function<'b>(
                         // push rax
                         instructions.push(0x50);
                     }
-                    // call [rip + offset]
-                    instructions.extend_from_slice(&[0xFF, 0x15]);
+                    // lea rax, [rip + offset]
+                    instructions.extend_from_slice(&[0x48, 0x8D, 0x05]);
                     function_calls.push((arena.alloc_slice(*name) as &[u8], instructions.len()));
                     instructions.extend_from_slice(&0u32.to_le_bytes());
+                    // call rax
+                    instructions.extend_from_slice(&[0xFF, 0xD0]);
                     
                     store(instructions, *ret, Register::Rax, &mut stack_size);
                     
@@ -838,7 +840,7 @@ pub fn lower_function<'b>(
         instructions[jmp..jmp+4].copy_from_slice(&offset.to_le_bytes());
     }
 
-    Some(function_calls.array())
+    Some(())
 }
 fn load(instructions: &mut Vec<u8>, source: u32, register: Register, stack_size: u32) {
     if source > stack_size {

@@ -23,14 +23,16 @@ fn check_ast_and_ir() {
                     let mut ir = String::new();
                     let mut instructions = Vec::new();
 
+                    let mut function_calls = Vec::new();
+
                     let mut frag = parse_file(&mut tokenizer, &arena);
                     while let Ok(fr) = frag {
                         ast += &format!("{:?}", fr);
 
                         if let Fragment::ASTfunction(func) = fr {
-                            let cf = lower_function(&arena, &func).unwrap();
+                            let cf = lower_function(&arena, &func, &[]).unwrap();
                             ir += &format!("{:?}", cf);
-                            assembly_lowerer::lower_function(&cf, &mut instructions, &arena).unwrap();
+                            assembly_lowerer::lower_function(&cf, &mut instructions, &arena, &mut function_calls).unwrap();
                         }
                         frag = parse_file(&mut tokenizer, &arena);
                     }
