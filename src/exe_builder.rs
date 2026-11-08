@@ -1,6 +1,5 @@
-#![allow(unused)]
-
-use std::{ffi::OsString, fs::{File, write}, io::Write};
+use std::fs::{File, write};
+use std::io::Write;
 
 pub fn build(
     instructions: &mut Vec<u8>, 
@@ -17,7 +16,7 @@ pub fn build(
         instructions.push(0xC3);
     }
 
-    File::options().append(true).open(output_path).unwrap().write(instructions);
+    File::options().append(true).open(output_path).unwrap().write(instructions).unwrap();
 }
 fn build_header(vec: Vec<u8>, code_size: u32) -> Vec<u8> {
     let mut builder = BinaryBuilder::with_vec(vec);
@@ -184,9 +183,6 @@ impl BinaryBuilder {
     fn with_vec(vec: Vec<u8>) -> BinaryBuilder {
         BinaryBuilder { buffer: vec }
     }
-    fn with_capacity(capacity: usize) -> BinaryBuilder {
-        BinaryBuilder { buffer: Vec::with_capacity(capacity) }
-    }
     fn push_u8_le(&mut self, value: u8) {
         self.buffer.push(value);
     }
@@ -204,9 +200,6 @@ impl BinaryBuilder {
     }
     fn len(&self) -> usize {
         self.buffer.len()
-    }
-    fn as_slice(&self) -> &[u8] {
-        &self.buffer
     }
     fn to_vec(self) -> Vec<u8> {
         self.buffer

@@ -32,7 +32,7 @@ fn check_ast_and_ir() {
                         if let Fragment::ASTfunction(func) = fr {
                             let cf = lower_function(&arena, &func, &[]).unwrap();
                             ir += &format!("{:?}", cf);
-                            assembly_lowerer::lower_function(&cf, &mut instructions, &arena, &mut function_calls).unwrap();
+                            assembly_lowerer::lower_function(&cf, &mut instructions, &arena, &mut function_calls);
                         }
                         frag = parse_file(&mut tokenizer, &arena);
                     }

@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use std::fs::read;
 
 use crate::assembly_lowerer;
@@ -16,7 +14,7 @@ pub fn compile(input_path: &str, output_path: &str) {
 
     let mut t = Tokenizer::new(&input);
 
-    let mut arena = Arena::new();
+    let arena = Arena::new();
 
     let mut functions: Vec<ASTfunction<'_, '_>> = Vec::new();
 
@@ -46,11 +44,11 @@ pub fn compile(input_path: &str, output_path: &str) {
                 }
                 functions.push(astfunction);
             },
-            Fragment::Include(include) => todo!(),
-            Fragment::Constant(constant) => todo!(),
+            Fragment::Include(_) => todo!(),
+            Fragment::Constant(_) => todo!(),
             Fragment::Struct(_) => todo!(),
-            Fragment::Union(union) => todo!(),
-            Fragment::GlobalVariable(global_variable) => todo!(),
+            Fragment::Union(_) => todo!(),
+            Fragment::GlobalVariable(_) => todo!(),
         }
         fr = parse_file(&mut t, &arena);
     }
@@ -74,7 +72,7 @@ pub fn compile(input_path: &str, output_path: &str) {
     for func in functions[2..].iter() {
         function_starts.push((func.name, instructions.len()));
         let ir = ir_lowerer::lower_function(&arena, func, &functions).unwrap();
-        assembly_lowerer::lower_function(&ir, &mut instructions, &arena, &mut function_calls).unwrap();
+        assembly_lowerer::lower_function(&ir, &mut instructions, &arena, &mut function_calls);
     }
 
     let main = function_starts.iter().find(|x| x.0 == b"main").unwrap();
@@ -159,9 +157,9 @@ const EXIT_CODE: [u8; 19] = [
     // call *[rip - 4096 - 33 - 74 - 19 + 96] exit FFFF EFE2
     0xff, 0x15, 0xE2, 0xEF, 0xFF, 0xFF,
 ];
-const READ_CODE: &[u8] = &[
+//const READ_CODE: &[u8] = &[
     
-];
+//];
 //80 gethandle
 //88 write
 //96 exit

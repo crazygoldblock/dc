@@ -156,9 +156,6 @@ impl<'a> Tokenizer<'a> {
             last: checkpoint.last 
         }
     }
-    pub fn rest(&self) -> &'a str {
-        str::from_utf8(&self.buffer[self.index..]).unwrap()
-    }
     pub fn get_current_line(&self) -> &'a str {
         let mut start = 0;
         for i in (0..self.index).rev() {
