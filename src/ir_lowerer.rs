@@ -1,18 +1,21 @@
 #![allow(unused)]
 
 use crate::arena::{Arena, VecArena};
+use crate::ir_lowerer::RegisterType::Ptr;
 use crate::parser::{Expression, ASTfunction, Statement, Struct, Type, Union, ASTbinaryOperator, ASTunaryOperator};
 
 // Check for missing returns and jumps to non existent blocks
 
 // return function signatures
 // alloca instruction for array inits
+// array init bad
 
 #[derive(Debug)]
 pub struct IRfunction<'b> {
     pub name: &'b [u8],
     pub paramaters_count: u16,
     pub blocks: &'b [Block<'b>],
+    pub stack_size: u32,
 }
 #[derive(Debug)]
 pub struct Block<'b> {
@@ -242,6 +245,7 @@ pub fn lower_function<'b>(
         name: arena.alloc_slice(function.name) as &[u8],
         paramaters_count: parameters.len() as u16,
         blocks: blocks.array(),
+        stack_size,
     });
 }
 #[derive(PartialEq, Clone, Debug)]
@@ -384,7 +388,7 @@ fn lower_expression<'a, 'b, 'c>(
         Expression::BinaryOperator { operator, left, right } => {
             let (left_offset, mut left_type) = lower_expression(left, arena, stack_size, instructions, variables, functions).unwrap();
 
-            let (right_offset, mut right_type) = lower_expression(right, arena, stack_size, instructions, variables, functions).unwrap();
+            let (mut right_offset, mut right_type) = lower_expression(right, arena, stack_size, instructions, variables, functions).unwrap();
 
             let op = match operator {
                 ASTbinaryOperator::Add => {
@@ -399,6 +403,7 @@ fn lower_expression<'a, 'b, 'c>(
                             left: *stack_size, 
                             right: right_offset, 
                         });
+                        right_offset = *stack_size;
                         (IRbinaryOperator::Add, left_type, 64)
                     }
                     else {
@@ -426,6 +431,7 @@ fn lower_expression<'a, 'b, 'c>(
                             left: *stack_size, 
                             right: right_offset, 
                         });
+                        right_offset = *stack_size;
                         (IRbinaryOperator::Sub, left_type, 64)
                     }
                     else {
@@ -606,7 +612,37 @@ fn lower_expression<'a, 'b, 'c>(
                     };
                     (op, RegisterType::Bool, left_type.size())
                 },
-                ASTbinaryOperator::Index => todo!(),
+                ASTbinaryOperator::Index => {
+                    if !left_type.is_ptr() || !(right_type.is_int() && right_type.size() == 64) {
+                        panic!();
+                    }
+
+                    *stack_size += 8;
+                    instructions.push(Instruction::Immediate { destination: *stack_size, value: left_type.ptr_element_size() / 8 });
+                           
+                    instructions.push(Instruction::BinaryOperation { 
+                        size: 64, 
+                        operation: IRbinaryOperator::Mul, 
+                        destination: *stack_size, 
+                        left: *stack_size, 
+                        right: right_offset, 
+                    });
+                    right_offset = *stack_size;
+
+                    instructions.push(Instruction::BinaryOperation { 
+                        size: 64, 
+                        operation: IRbinaryOperator::Add, 
+                        destination: *stack_size, 
+                        left: left_offset, 
+                        right: right_offset, 
+                    });
+
+                    instructions.push(Instruction::Load { size: left_type.ptr_element_size() as u8, destination: *stack_size, address: *stack_size });
+
+                    let return_type = if let RegisterType::Ptr(VariableType::Primitive(prim)) = left_type { prim } else { panic!(); };
+
+                    return Some((*stack_size, return_type.clone()));
+                },
             };
 
             *stack_size += 8;
@@ -808,7 +844,7 @@ fn lower_expression<'a, 'b, 'c>(
             let (exp_offset, exp_type) = lower_expression(&expressions[0], arena, stack_size, instructions, variables, functions).unwrap();
             let mut array_type = exp_type;
 
-            *stack_size += (array_type.ptr_element_size()/8 * expressions.len() as u64) as u32;
+            *stack_size += (array_type.size() as u64 /8 * expressions.len() as u64) as u32;
             *stack_size = stack_size.next_multiple_of(8);
             let array_offset = *stack_size;
 
@@ -818,10 +854,10 @@ fn lower_expression<'a, 'b, 'c>(
             let ptr_offset = *stack_size;
 
             *stack_size += 8;
-            instructions.push(Instruction::Immediate { destination: *stack_size, value: array_type.ptr_element_size() });
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: array_type.size() as u64 /8 });
             let element_size_offset = *stack_size;
 
-            instructions.push(Instruction::Store { size: array_type.ptr_element_size() as u8, source: exp_offset, address: ptr_offset });
+            instructions.push(Instruction::Store { size: array_type.size() as u8, source: exp_offset, address: ptr_offset });
             
             for (i, e) in expressions[1..].iter().enumerate() {
                 let (exp_offset, exp_type) = lower_expression(e, arena, stack_size, instructions, variables, functions).unwrap();
@@ -831,7 +867,7 @@ fn lower_expression<'a, 'b, 'c>(
                 }
                 
                 instructions.push(Instruction::BinaryOperation { size: 64, operation: IRbinaryOperator::Add, destination: ptr_offset, left: ptr_offset, right: element_size_offset });
-                instructions.push(Instruction::Store { size: array_type.ptr_element_size() as u8, source: exp_offset, address: ptr_offset });
+                instructions.push(Instruction::Store { size: array_type.size() as u8, source: exp_offset, address: ptr_offset });
             }
             return Some((ptr_offset, ret_type));
         },
@@ -1004,8 +1040,7 @@ fn lower_statement<'a, 'b, 'c>(
         },
         Statement::Declaration { typ, name, value } => {
             let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let Type::Name(var_type) = typ else { panic!(); };
-            let reg_t = RegisterType::from_str(*var_type).unwrap();
+            let reg_t = type_to_register(typ, arena);
 
             if variables.iter().rev().find(|x| &x.0 == name).is_some() {
                 panic!();
