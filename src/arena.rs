@@ -12,13 +12,7 @@ pub struct Arena {
 }
 impl Arena {
     pub fn new() -> Arena {
-        unsafe {
-            Arena { 
-                buffer: alloc(Layout::from_size_align_unchecked(1024*1024, 4096)), 
-                capacity: 1024*1024, 
-                top: Cell::new(1024*1024),  
-            }
-        }
+        Self::with_capacity(1024*1024)
     }
     pub fn with_capacity(capacity: usize) -> Arena {
         unsafe {
@@ -32,9 +26,7 @@ impl Arena {
     pub fn alloc<T>(&self, value: T) -> &mut T {
         if needs_drop::<T>() { panic!(); }
         unsafe {
-            self.top.replace((self.top.get() - size_of::<T>()) & !(align_of::<T>()-1));
-            if self.top.get() > self.capacity { panic!(); }
-            let ptr = self.buffer.add(self.top.get()) as *mut T;
+            let ptr = self.alloc_raw(size_of::<T>(), align_of::<T>()) as *mut T;
             *ptr = value;
             &mut *ptr
         }
@@ -42,9 +34,7 @@ impl Arena {
     pub fn alloc_array<T: Clone>(&self, value: T, len: usize) -> &mut [T] {
         if needs_drop::<T>() { panic!(); }
         unsafe {
-            self.top.replace((self.top.get() - size_of::<T>() * len) & !(align_of::<T>()-1));
-            if self.top.get() > self.capacity { panic!(); }
-            let ptr = self.buffer.add(self.top.get()) as *mut MaybeUninit<T>;
+            let ptr = self.alloc_raw(size_of::<T>() * len, align_of::<T>()) as *mut MaybeUninit<T>;
             let array = from_raw_parts_mut(ptr, len);
 
             for e in array.iter_mut() {
@@ -55,11 +45,8 @@ impl Arena {
     }
     pub fn alloc_slice<'a, T: Copy>(&'a self, slice: &[T]) -> &'a mut [T] {
         unsafe {
-            self.top.replace((self.top.get() - size_of::<T>() * slice.len()) & !(align_of::<T>()-1));
-            if self.top.get() > self.capacity { panic!(); }
-            let ptr = self.buffer.add(self.top.get()) as *mut T;
+            let ptr = self.alloc_raw(size_of::<T>() * slice.len(), align_of::<T>()) as *mut T;
             copy_nonoverlapping(slice.as_ptr(), ptr, slice.len());
-
             from_raw_parts_mut(ptr, slice.len())
         }
     }
@@ -67,16 +54,19 @@ impl Arena {
         self.top.replace(self.capacity);
     }
     pub fn vec_capacity<T>(&self, capacity: usize) -> VecArena<'_, T> {
+        let ptr = self.alloc_raw(size_of::<T>() * capacity, align_of::<T>()) as *mut T;
+        VecArena { 
+            arena: &self, 
+            buffer: ptr, 
+            capacity, 
+            len: 0, 
+        }
+    }
+    fn alloc_raw(&self, size: usize, align: usize) -> *mut u8 {
         unsafe {
-            self.top.replace((self.top.get() - size_of::<T>() * capacity) & !(align_of::<T>()-1));
+            self.top.replace((self.top.get() - size) & !(align-1));
             if self.top.get() > self.capacity { panic!(); }
-            let ptr = self.buffer.add(self.top.get()) as *mut T;
-            VecArena { 
-                arena: &self, 
-                buffer: ptr, 
-                capacity, 
-                len: 0, 
-            }
+            self.buffer.add(self.top.get())
         }
     }
 }
@@ -91,17 +81,12 @@ impl<'a, T> VecArena<'a, T> {
         unsafe {
             if self.capacity == self.len {
                 let new_capacity = self.capacity * 2;
-
-                self.arena.top.replace((self.arena.top.get() - size_of::<T>() * new_capacity) & !(align_of::<T>()-1));
-                if self.arena.top.get() > self.arena.capacity { panic!(); }
-                let ptr = self.arena.buffer.add(self.arena.top.get()) as *mut T;
+                let ptr = self.arena.alloc_raw(size_of::<T>() * new_capacity, align_of::<T>()) as *mut T;
 
                 copy_nonoverlapping(self.buffer, ptr, self.capacity);
-
                 self.buffer = ptr;
                 self.capacity = new_capacity;
             }
-
             *self.buffer.add(self.len) = element;
             self.len += 1;
         }

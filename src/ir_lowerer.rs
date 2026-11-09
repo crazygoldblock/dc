@@ -827,21 +827,20 @@ fn lower_expression<'a, 'b, 'c>(
             }
             
             let (exp_offset, array_type) = lower_expression(&expressions[0], arena, stack_size, instructions, variables, functions).unwrap();
-
-            *stack_size += (array_type.size() as u64 /8 * expressions.len() as u64) as u32;
+            
+            *stack_size += array_type.size() as u32 / 8 * expressions.len() as u32;
             *stack_size = stack_size.next_multiple_of(8);
-            let array_offset = *stack_size;
+            let array_start_offset = *stack_size;
 
             *stack_size += 8;
-            let ret_type = RegisterType::Ptr(VariableType::Primitive(arena.alloc(array_type.clone())));
-            instructions.push(Instruction::AddrOf { source: array_offset, destination: *stack_size });
-            let ptr_offset = *stack_size;
+            instructions.push(Instruction::AddrOf { source: array_start_offset, destination: *stack_size });
+            let array_ptr_offset = *stack_size;
 
             *stack_size += 8;
             instructions.push(Instruction::Immediate { destination: *stack_size, value: array_type.size() as u64 /8 });
             let element_size_offset = *stack_size;
 
-            instructions.push(Instruction::Store { size: array_type.size() as u8, source: exp_offset, address: ptr_offset });
+            instructions.push(Instruction::Store { size: array_type.size() as u8, source: exp_offset, address: array_ptr_offset });
             
             for e in expressions[1..].iter() {
                 let (exp_offset, exp_type) = lower_expression(e, arena, stack_size, instructions, variables, functions).unwrap();
@@ -850,10 +849,13 @@ fn lower_expression<'a, 'b, 'c>(
                     panic!();
                 }
                 
-                instructions.push(Instruction::BinaryOperation { size: 64, operation: IRbinaryOperator::Add, destination: ptr_offset, left: ptr_offset, right: element_size_offset });
-                instructions.push(Instruction::Store { size: array_type.size() as u8, source: exp_offset, address: ptr_offset });
+                instructions.push(Instruction::BinaryOperation { size: 64, operation: IRbinaryOperator::Add, destination: array_ptr_offset, left: array_ptr_offset, right: element_size_offset });
+                instructions.push(Instruction::Store { size: array_type.size() as u8, source: exp_offset, address: array_ptr_offset });
             }
-            return Some((ptr_offset, ret_type));
+            instructions.push(Instruction::AddrOf { source: array_start_offset, destination: array_ptr_offset });
+
+            let ret_type = RegisterType::Ptr(VariableType::Primitive(arena.alloc(array_type.clone())));
+            return Some((array_ptr_offset, ret_type));
         },
         Expression::StructInit(_) => todo!(),
     }
@@ -883,6 +885,22 @@ fn lower_statement<'a, 'b, 'c>(
 
                     instructions.push(Instruction::Move { source: value.unwrap().0, destination: *dest_offset });
                 }
+                else if let Expression::UnaryOperator { operator, expr } = d {
+                    if *operator != ASTunaryOperator::Dereference {
+                        panic!();
+                    }
+                    if let Expression::Name(n) = expr { 
+                        let ptr = variables.iter().find(|x| x.0 == *n).unwrap();
+                        if !ptr.2.is_ptr() { panic!(); }
+
+                        if let RegisterType::Ptr(VariableType::Primitive(prim)) = ptr.2 {
+                            if *prim != value.clone().unwrap().1 { panic!(); }
+                        }
+                        instructions.push(Instruction::Store { size: value.clone().unwrap().1.size(), source: value.unwrap().0, address: ptr.1 });
+                    }
+                    else { panic!(); }
+                }
+                else { panic!() }  
             }
         },
         Statement::Return { value } => {

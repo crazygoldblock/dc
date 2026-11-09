@@ -821,9 +821,9 @@ pub fn lower_function<'b>(
                     store(instructions, *destination, Register::Rax);
                 },
                 Instruction::AddrOf { source, destination } => {
-                    // lea rax, rbp + [-8 * index+1]
+                    // lea rax, rbp + [-index]
                     instructions.extend_from_slice(&[0x48, 0x8D, 0x85]);
-                    instructions.extend_from_slice(&( -8*(*source as i32 + 1) ).to_le_bytes());
+                    instructions.extend_from_slice(&( -(*source as i32) ).to_le_bytes());
 
                     store(instructions, *destination, Register::Rax);
                 },
@@ -839,27 +839,27 @@ pub fn lower_function<'b>(
 fn load(instructions: &mut Vec<u8>, source: u32, size: u8, register: Register) {
     match register {
         Register::Rax => {
-            // mov rax, rbp + [-8 * index+1]
+            // mov rax, rbp + [-index]
             instructions.extend_from_slice(&[0x48, 0x8B, 0x85]);
         },
         Register::Rbx => {
-            // mov rbx, rbp + [-8 * index+1]
+            // mov rbx, rbp + [-index]
             instructions.extend_from_slice(&[0x48, 0x8B, 0x9D]);
         },
         Register::Xmm0 => {
-            // movss xmm0, rbp + [-8 * left+1] 
+            // movss xmm0, rbp + [-index] 
             instructions.extend_from_slice(&[0xF3, 0x0F, 0x10, 0x85]);               
         },
         Register::Xmm1 => {
-            // movss xmm1, rbp + [-8 * right+1] 
+            // movss xmm1, rbp + [-index] 
             instructions.extend_from_slice(&[0xF3, 0x0F, 0x10, 0x8D]);
         },
         Register::Xmm0d => {
-            // movsd xmm0, rbp + [-8 * left+1] 
+            // movsd xmm0, rbp + [-index] 
             instructions.extend_from_slice(&[0xF2, 0x0F, 0x10, 0x85]);             
         },
         Register::Xmm1d => {
-            // movsd xmm1, rbp + [-8 * right+1] 
+            // movsd xmm1, rbp + [-index] 
             instructions.extend_from_slice(&[0xF2, 0x0F, 0x10, 0x8D]);
         },
     }
@@ -889,15 +889,15 @@ fn load(instructions: &mut Vec<u8>, source: u32, size: u8, register: Register) {
 fn store(instructions: &mut Vec<u8>, destination: u32, register: Register) {
     match register {
         Register::Rax => {
-            // mov rbp + [-8 * destination+1], rax
+            // mov rbp + [-destination], rax
             instructions.extend_from_slice(&[0x48, 0x89, 0x85]);
         },
         Register::Xmm0 => {
-            // movss rbp + [-8 * destination+1], xmm0
+            // movss rbp + [-destination], xmm0
             instructions.extend_from_slice(&[0xF3, 0x0F, 0x11, 0x85]);
         },
         Register::Xmm0d => {
-            // movsd rbp + [-8 * destination+1], xmm0
+            // movsd rbp + [-destination], xmm0
             instructions.extend_from_slice(&[0xF2, 0x0F, 0x11, 0x85]);
         },
         _ => panic!(),
