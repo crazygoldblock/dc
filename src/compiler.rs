@@ -3,16 +3,15 @@ use std::fs::read;
 use crate::assembly_lowerer;
 use crate::exe_builder::build;
 use crate::ir_lowerer;
-use crate::parser::ASTfunction;
-use crate::parser::ParseError;
-use crate::parser::Type;
-use crate::{arena::Arena, lexer::Tokenizer, parser::parse_file};
-use crate::parser::Fragment;
+use crate::ir_lowerer::IRerror;
+use crate::ir_lowerer::RegisterType;
+use crate::{arena::Arena, lexer::Lexer, parser::parse_file};
+use crate::parser::{ASTunaryOperator, ASTbinaryOperator, Fragment, Type, ParseError, ASTfunction};
 
-pub fn compile(input_path: &str, output_path: &str) {
+pub fn compile(input_path: &str) -> Result<Vec<u8>, String> {
     let input = read(input_path).unwrap();
 
-    let mut t = Tokenizer::new(&input);
+    let mut t = Lexer::new(&input);
 
     let arena = Arena::new();
 
@@ -53,15 +52,13 @@ pub fn compile(input_path: &str, output_path: &str) {
         fr = parse_file(&mut t, &arena);
     }
     if !matches!(fr, Err(ParseError::EndOfFile)) {
-        fr.unwrap();
+        return Err(parse_error(fr.unwrap_err()));
     }
 
     let mut instructions = Vec::new();
     instructions.extend_from_slice(&START_CODE);
     instructions.extend_from_slice(&PRINT_CODE);
     instructions.extend_from_slice(&EXIT_CODE);
-
-    // user code calling system func
 
     let mut function_calls = Vec::new();
     
@@ -71,8 +68,11 @@ pub fn compile(input_path: &str, output_path: &str) {
 
     for func in functions[2..].iter() {
         function_starts.push((func.name, instructions.len()));
-        let ir = ir_lowerer::lower_function(&arena, func, &functions).unwrap();
-        assembly_lowerer::lower_function(&ir, &mut instructions, &arena, &mut function_calls);
+        let ir = match ir_lowerer::lower_function(&arena, func, &functions) {
+            Ok(ir) => ir,
+            Err(e) => return Err(ir_error(e)),
+        };
+        assembly_lowerer::lower_function(&ir, &mut instructions, &arena, &arena, &mut function_calls);
     }
 
     let main = function_starts.iter().find(|x| x.0 == b"main").unwrap();
@@ -83,10 +83,107 @@ pub fn compile(input_path: &str, output_path: &str) {
         instructions[call.1..call.1+4].copy_from_slice(&(func.1 as i32 - call.1 as i32 - 4).to_le_bytes());
     }
 
-    build(&mut instructions, output_path);
-    
+    Ok(build(&mut instructions)) 
 }
-
+fn parse_error(error: ParseError) -> String {
+    match error {
+        ParseError::EndOfFile => unreachable!(),
+        ParseError::UnexpectedEndOfFile { line } => format!("Unexpected end of file!\nLine: {line}"),
+        ParseError::ExpectedKeyword { expected, found, line } => format!("Expected keyword: {expected}, found: {found}!\nLine: {line}"),
+        ParseError::ExpectedSymbol { expected, found, line } => format!("Expected symbol: {expected}, found: {found}!\nLine: {line}"),
+        ParseError::ExpectedIdentifier { found, line } => format!("Expected idendifier, found: {found}!\nLine:{line}"),
+        ParseError::ExpectedOperator { found, line } => format!("Expected operator, found: {found}!\nLine: {line}"),
+        ParseError::UnclosedBrackets { line } => format!("Unclosed brackets!\nLine: {line}"),
+        ParseError::UnOpenedBrackets { line } => format!("Unopened brackets!\nLine: {line}"),
+        ParseError::ExpectedConstValue { line } => format!("Expected Const value!\nLine: {line}"),
+        ParseError::ExpectedNumberLiteral { line } => format!("Expected number literal!\nLine: {line}"),
+    }
+}
+fn ir_error(error: IRerror) -> String {
+    match error {
+        IRerror::BinaryOperationType { operator, left, right } => {
+            match operator {
+                ASTbinaryOperator::Add => 
+                    format!("Binary operator Addition can be used only with two integers or floats with the same sign ans size or poiner and 64bit integer!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Sub => 
+                    format!("Binary operator Subtraction can be used for two types that are the same but are not pointers or bools, or pointer and i64 or u64!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Mul => 
+                    format!("Binary operator Multiply can be used for two types that are the same and are integers or floats!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Div => 
+                    format!("Binary operator Division can be used for two types that are the same and are integers or floats!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Rem => 
+                    format!("Binary operator Remainder can be used for two types that are the same and are integers or floats!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::And => 
+                    format!("Binary operator And can be used for two types that are the same and are integers!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Xor => 
+                    format!("Binary operator Xor can be used for two types that are the same and are integers!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Or => 
+                    format!("Binary operator Or can be used for two types that are the same and are integers!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Shl => 
+                    format!("Binary operator Shift left can be used for two types that are the same and are integers!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Shr => 
+                    format!("Binary operator Shift right can be used for two types that are the same and are integers!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Less => 
+                    format!("Binary operator Less can be used for two types that are the same and are integers or floats!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::LessEq => 
+                    format!("Binary operator Less Or Equals can be used for two types that are the same and are integers or floats!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Greater => 
+                    format!("Binary operator Greater can be used for two types that are the same and are integers or floats!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::GreaterEq => 
+                    format!("Binary operator Greater or Eguals can be used for two types that are the same and are integers or floats!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Eq => 
+                    format!("Binary operator Equals can be used only for two types that are the same!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::NotEq => 
+                    format!("Binary operator Not Equals can be used only for two types that are the same!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::LogicalAnd => 
+                    format!("Binary operator Logical And can be used only for two bools!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::LogicalOr => 
+                    format!("Binary operator Logical Or can be used only for two bools!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+                ASTbinaryOperator::Index => 
+                    format!("Binary operator Index And can be used only on pointer and 64bit integer!\nLeft Type: {}, Right Type: {}", left.to_string(), right.to_string()),
+            }
+        },
+        IRerror::UnaryOperatorType { operator, found } => {
+            match operator {
+                ASTunaryOperator::Sub => format!("Unary Subtraction operator can be used only with integer Types!\nFound: {}", found.to_string()),
+                ASTunaryOperator::Address => panic!("no error"),
+                ASTunaryOperator::Not => format!("Unary Not operator can be used only with integer Types!\nFound: {}", found.to_string()),
+                ASTunaryOperator::Invert => format!("Unary Invert operator can be used only with type bool!\nFound: {}", found.to_string()),
+                ASTunaryOperator::Dereference => format!("Unary Dereference operator can be used only with pointer Types!\nFound: {}", found.to_string()),
+            }
+        },
+        IRerror::AssignmentType { expr, destination } => 
+            format!("Assignment value must have the same type as the destination!\nValue Type: {}, Destination type: {}", expr.to_string(), destination.to_string()),
+        IRerror::EmptyType => format!("Function call returns empty type, when value was expected"),
+        IRerror::ReturnType { expected, found } => 
+            format!("Return statement value has the wrong type!\nExpected: {}, Found: {}", opt_reg_str(expected), opt_reg_str(found)),
+        IRerror::ConditionType { found } => 
+            format!("Condition expression inside If, While, For and Do-while must return bool Type!\nfound: {}", found.to_string()),
+        IRerror::ParameterType { expected, found } => 
+            format!("Expression as function parameter returns wrong Type!\nExpected: {}, Found: {}", expected.to_string(), found.to_string()),
+        IRerror::ArrayElementType { expected, found } => 
+            format!("All elements of an array must have the same type!\nExpected: {}, Found: {}", expected.to_string(), found.to_string()),
+        IRerror::CastType { exp_type, cast_type } => 
+            format!("Invalid cast Type!\nFrom: {}, To: {}", exp_type.to_string(), cast_type.to_string()),
+        IRerror::CallParametersCount { expected, found } => format!("Function call the wrong number of parameters!\nExpected: {expected}, Found: {found}"),
+        IRerror::BreakOutsideLoop => format!("Break statement used outside of loop!"),
+        IRerror::DuplicateVariableName { name } => format!("Variable with this name already exists! Name: {}", String::from_utf8_lossy(name)),
+        IRerror::DeclarationDestinationType { expected, found } => 
+            format!("Type of value in declaration must be the same as the variable!\nExpected: {}, Found: {}", expected.to_string(), found.to_string()),
+        IRerror::LeftsideOpNotDeref => format!("The only operator allowed on the left side of assignment is Dereference!"),
+        IRerror::LeftsideDerefNotVar => format!("Only variables can be dereferenced on the left side of an assignment!"),
+        IRerror::LeftsideInvalidExpr => format!("Left side of assgnment statement is invalid!"),
+        IRerror::VarNameNotFound { name } => format!("Use of unknown variable! Name: {}", String::from_utf8_lossy(name)),
+        IRerror::FunctionNotFound { name } => format!("Use of unknown function! Name: {}", String::from_utf8_lossy(name)),
+        IRerror::InvalidType { typ } => format!("Found invalid Type! Type: {}", String::from_utf8_lossy(typ)),
+    }
+}
+fn opt_reg_str(reg: Option<RegisterType>) -> String {
+    match reg {
+        Some(r) => r.to_string(),
+        None => "None".to_string(),
+    }
+}
 const START_CODE: [u8; 33] = [
     // call [rip - 0x1000 - 6 + 104] command line FFFF F062
     0xFF, 0x15, 0x62, 0xF0, 0xFF, 0xFF,

@@ -4,7 +4,7 @@ fn check_ast_and_ir() {
 
     use crate::arena::Arena;
     use crate::ir_lowerer::lower_function;
-    use crate::lexer::Tokenizer;
+    use crate::lexer::Lexer;
     use crate::parser::{Fragment, parse_file, ParseError};
     use crate::assembly_lowerer;
 
@@ -16,7 +16,7 @@ fn check_ast_and_ir() {
             if let Some(ext) = path.extension() {
                 if ext == "dl" {
                     let file = read_to_string(&path).unwrap();
-                    let mut tokenizer = Tokenizer::new(file.as_bytes());
+                    let mut tokenizer = Lexer::new(file.as_bytes());
                     let arena = Arena::new();
 
                     let mut ast = String::new();
@@ -32,7 +32,7 @@ fn check_ast_and_ir() {
                         if let Fragment::ASTfunction(func) = fr {
                             let cf = lower_function(&arena, &func, &[]).unwrap();
                             ir += &format!("{:?}", cf);
-                            assembly_lowerer::lower_function(&cf, &mut instructions, &arena, &mut function_calls);
+                            assembly_lowerer::lower_function(&cf, &mut instructions, &arena, &arena, &mut function_calls);
                         }
                         frag = parse_file(&mut tokenizer, &arena);
                     }

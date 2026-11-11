@@ -1,8 +1,7 @@
 use crate::arena::{Arena, VecArena};
 use crate::parser::{Expression, ASTfunction, Statement, Type, ASTbinaryOperator, ASTunaryOperator};
 
-// Check for missing returns and jumps to non existent blocks
-// array init bad
+// TODO: Check for missing returns and jumps to non existent blocks
 
 #[derive(Debug)]
 pub struct IRfunction<'b> {
@@ -21,7 +20,7 @@ pub enum Instruction<'b> {
         value: u64,
     },
     ImmediateFloat{
-        typ: &'static str,
+        long: bool,
         destination: u32,
         value: f64,
     },
@@ -196,11 +195,71 @@ impl IRbinaryOperator {
         }
     }
 }
+#[derive(Debug)]
+pub enum IRerror<'a> {
+    BinaryOperationType{
+        operator: ASTbinaryOperator,
+        left: RegisterType<'a>,
+        right: RegisterType<'a>,
+    },
+    UnaryOperatorType{
+        operator: ASTunaryOperator,
+        found: RegisterType<'a>,
+    },
+    AssignmentType{
+        expr: RegisterType<'a>,
+        destination: RegisterType<'a>,
+    },
+    EmptyType,
+    ReturnType{
+        expected: Option<RegisterType<'a>>,
+        found: Option<RegisterType<'a>>,
+    },
+    ConditionType{
+        found: RegisterType<'a>,
+    },
+    ParameterType{
+        expected: RegisterType<'a>,
+        found: RegisterType<'a>,
+    },
+    ArrayElementType{
+        expected: RegisterType<'a>,
+        found: RegisterType<'a>,
+    },
+    CastType{
+        exp_type: RegisterType<'a>,
+        cast_type: RegisterType<'a>,
+    },
+    CallParametersCount{
+        expected: u8,
+        found: u8,
+    },
+    BreakOutsideLoop,
+    DuplicateVariableName{
+        name: &'a[u8],
+    },
+    DeclarationDestinationType{
+        expected: RegisterType<'a>,
+        found: RegisterType<'a>,
+    },
+    LeftsideOpNotDeref,
+    LeftsideDerefNotVar,
+    LeftsideInvalidExpr,
+    VarNameNotFound{
+        name: &'a [u8],
+    },
+    FunctionNotFound{
+        name: &'a [u8],
+    },
+    InvalidType{
+        typ: &'a [u8],
+    }
+}
 pub fn lower_function<'b>(
     arena: &'b Arena,
     function: &ASTfunction,
     functions: &[ASTfunction],
-) -> Option<IRfunction<'b>> {
+) -> Result<IRfunction<'b>, IRerror<'b>> {
     let mut blocks = arena.vec_capacity(8);
     blocks.push(Block { instructions: arena.vec_capacity(16) });
 
@@ -211,29 +270,29 @@ pub fn lower_function<'b>(
     let parameters = arena.alloc_array(RegisterType::Bool, function.parameters.len());
 
     for (i, p) in function.parameters.iter().enumerate() {
-        let reg_type = type_to_register(&p.0, arena);
-        parameters[i] = reg_type.clone();
+        let reg_type = type_to_register(&p.0, arena)?;
+        parameters[i] = reg_type;
         stack_size += 8;
         variables.push((p.1, stack_size, reg_type));
     }
     stack_size += 8;
 
-    let return_type = if let Some(ret_t) = function.return_type.clone() {
-        Some(type_to_register(&ret_t, arena))
+    let return_type = if let Some(ref ret_t) = function.return_type {
+        Some(type_to_register(ret_t, arena)?)
     }
     else { None };
 
     for s in function.body {
-        lower_statement(s, arena, &mut stack_size, &mut blocks, &mut variables, return_type.clone(), None, functions).unwrap();
+        lower_statement(s, arena, &mut stack_size, &mut blocks, &mut variables, return_type, None, functions)?;
     }
 
-    return Some(IRfunction {
+    return Ok(IRfunction {
         paramaters_count: parameters.len() as u16,
         blocks: blocks.array(),
         stack_size,
     });
 }
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, Copy)]
 pub enum RegisterType<'b> {   
     I8,
     I16,
@@ -252,7 +311,7 @@ pub enum RegisterType<'b> {
 
     Ptr(VariableType<'b>),
 }
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, Copy)]
 #[non_exhaustive]
 pub enum VariableType<'b> {
     Primitive(&'b RegisterType<'b>),
@@ -327,14 +386,30 @@ impl<'b> RegisterType<'b> {
     fn ptr_element_size(&self) -> u64 {
         if let RegisterType::Ptr(ptr) = self {
             if let VariableType::Primitive(prim) = ptr {
-                prim.size() as u64
-            }
-            else {
-                panic!();
+                return prim.size() as u64;
             }
         }
-        else {
-            panic!();
+        panic!("type is not a pointer");
+    }
+    pub fn to_string(&self) -> String {
+        match self {
+            RegisterType::I8 => return "i8".to_string(),
+            RegisterType::I16 => return  "i16".to_string(),
+            RegisterType::I32 => return  "i32".to_string(),
+            RegisterType::I64 => return  "i64".to_string(),
+            RegisterType::U8 => return  "u8".to_string(),
+            RegisterType::U16 => return  "u16".to_string(),
+            RegisterType::U32 => return  "u32".to_string(),
+            RegisterType::U64 => return  "u64".to_string(),
+            RegisterType::F32 => return  "f32".to_string(),
+            RegisterType::F64 => return  "f64".to_string(),
+            RegisterType::Bool => return  "bool".to_string(),
+            RegisterType::Ptr(variable_type) => {
+                match variable_type {
+                    VariableType::Primitive(register_type) => "*".to_string() + &register_type.to_string(),
+                    VariableType::Struct => panic!("no structs"),
+                }
+            },
         }
     }
 }
@@ -345,36 +420,36 @@ fn lower_expression<'a, 'b, 'c>(
     instructions: &mut VecArena<'c, Instruction<'c>>,
     variables: &mut Vec<(&'a [u8], u32, RegisterType<'c>)>,
     functions: &[ASTfunction],
-) -> Option<(u32, RegisterType<'c>)> {
+) -> Result<Option<(u32, RegisterType<'c>)>, IRerror<'c>> {
 
     match expression {
         Expression::Integer{ typ, value } => {
-            let typ = RegisterType::from_str(typ.as_bytes()).unwrap();
+            let typ = type_to_register(&Type::Name(typ.as_bytes()), arena)?;
             *stack_size += 8;
             instructions.push(Instruction::Immediate { destination: *stack_size, value: *value });
-            return Some((*stack_size, typ));
+            return Ok(Some((*stack_size, typ)));
         },
-        Expression::Float{ typ, value} => {
-            let typ_r = RegisterType::from_str(typ.as_bytes()).unwrap();
+        Expression::Float{ long, value} => {
+            let typ_r = if *long { RegisterType::F64 } else { RegisterType::F32 };
             *stack_size += 8;
-            instructions.push(Instruction::ImmediateFloat { typ: *typ, destination: *stack_size, value: *value });
-            return Some((*stack_size, typ_r));
+            instructions.push(Instruction::ImmediateFloat { long: *long, destination: *stack_size, value: *value });
+            return Ok(Some((*stack_size, typ_r)));
         },
         Expression::Bool(b) => {
             *stack_size += 8;
             instructions.push(Instruction::Immediate { destination: *stack_size, value: *b as u64 });
-            return Some((*stack_size, RegisterType::Bool));
+            return Ok(Some((*stack_size, RegisterType::Bool)));
         },
         Expression::Name(n) => {
-            let pos = variables.iter().rev().find(|x| &x.0 == n).unwrap();
+            let pos = variables.iter().rev().find(|x| &x.0 == n).ok_or(IRerror::VarNameNotFound { name: arena.alloc_slice(n) })?;
             *stack_size += 8;
             instructions.push(Instruction::Move { source: pos.1, destination: *stack_size });
-            return Some((*stack_size, pos.2.clone()));
+            return Ok(Some((*stack_size, pos.2)));
         },
         Expression::BinaryOperator { operator, left, right } => {
-            let (left_offset, left_type) = lower_expression(left, arena, stack_size, instructions, variables, functions).unwrap();
+            let (left_offset, left_type) = lower_expression(left, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
-            let (mut right_offset, right_type) = lower_expression(right, arena, stack_size, instructions, variables, functions).unwrap();
+            let (mut right_offset, right_type) = lower_expression(right, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
             let op = match operator {
                 ASTbinaryOperator::Add => {
@@ -393,16 +468,15 @@ fn lower_expression<'a, 'b, 'c>(
                         (IRbinaryOperator::Add, left_type, 64)
                     }
                     else {
-                        if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
-                            println!("AAA LEFT: {:?}, RIGHT: {:?}", left_type, right_type);
-                            panic!();
+                        if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
+                            return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Add, left: left_type, right: right_type });
                         }
 
                         let op = match left_type.is_float() {
                             true => IRbinaryOperator::Fadd,
                             false => IRbinaryOperator::Add,
                         };
-                        (op, left_type.clone(), left_type.size())
+                        (op, left_type, left_type.size())
                     }
                 },
                 ASTbinaryOperator::Sub => {
@@ -421,8 +495,8 @@ fn lower_expression<'a, 'b, 'c>(
                         (IRbinaryOperator::Sub, left_type, 64)
                     }
                     else {
-                        if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
-                            panic!();
+                        if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
+                            return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Add, left: left_type, right: right_type });
                         }
 
                         let op = match left_type.is_float() {
@@ -434,8 +508,8 @@ fn lower_expression<'a, 'b, 'c>(
                     }
                 },
                 ASTbinaryOperator::Mul => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Mul, left: left_type, right: right_type });
                     }
 
                     let op = match left_type.is_float() {
@@ -446,8 +520,8 @@ fn lower_expression<'a, 'b, 'c>(
                     (op, left_type, size)
                 },
                 ASTbinaryOperator::Div => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Div, left: left_type, right: right_type });
                     }
 
                     let op = match (left_type.is_float(), left_type.is_signed()) {
@@ -459,8 +533,8 @@ fn lower_expression<'a, 'b, 'c>(
                     (op, left_type, size)
                 },
                 ASTbinaryOperator::Rem => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Rem, left: left_type, right: right_type });
                     }
 
                     let op = match (left_type.is_float(), left_type.is_signed()) {
@@ -472,22 +546,22 @@ fn lower_expression<'a, 'b, 'c>(
                     (op, left_type, size)
                 },
                 ASTbinaryOperator::And => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) || left_type.is_float() {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() || left_type.is_float() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::And, left: left_type, right: right_type });
                     }
                     let size = left_type.size();
                     (IRbinaryOperator::And, left_type, size)
                 },
                 ASTbinaryOperator::Xor => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) || left_type.is_float() {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() || left_type.is_float() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Xor, left: left_type, right: right_type });
                     }
                     let size = left_type.size();
                     (IRbinaryOperator::Xor, left_type, size)
                 },
                 ASTbinaryOperator::Or => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) || left_type.is_float() {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() || left_type.is_float() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Or, left: left_type, right: right_type });
                     }
                     let size = left_type.size();
                     (IRbinaryOperator::Or, left_type, size)
@@ -495,7 +569,7 @@ fn lower_expression<'a, 'b, 'c>(
                 ASTbinaryOperator::Shl => {
                     // TODO: out of bounds shift
                     if !right_type.is_unsigned() || !left_type.is_int() {
-                        panic!();
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Shl, left: left_type, right: right_type });
                     }
                     let size = left_type.size();
                     (IRbinaryOperator::Shl, left_type, size)
@@ -503,7 +577,7 @@ fn lower_expression<'a, 'b, 'c>(
                 ASTbinaryOperator::Shr => {
                     // TODO: out of bounds shift
                     if !right_type.is_unsigned() || !left_type.is_int() {
-                        panic!();
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Shl, left: left_type, right: right_type });
                     }
 
                     let op = match left_type.is_signed() {
@@ -515,21 +589,21 @@ fn lower_expression<'a, 'b, 'c>(
                 },
                 ASTbinaryOperator::LogicalAnd => {
                     if left_type != RegisterType::Bool || right_type != RegisterType::Bool {
-                        panic!();
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::LogicalAnd, left: left_type, right: right_type });
                     }
                     let size = left_type.size();
                     (IRbinaryOperator::And, left_type, size)
                 },
                 ASTbinaryOperator::LogicalOr => {
                     if left_type != RegisterType::Bool || right_type != RegisterType::Bool {
-                        panic!();
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::LogicalOr, left: left_type, right: right_type });
                     }
                     let size = left_type.size();
                     (IRbinaryOperator::Or, left_type, size)
                 },
                 ASTbinaryOperator::Less => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Less, left: left_type, right: right_type });
                     }
 
                     let op = match (left_type.is_float(), left_type.is_signed()) {
@@ -540,8 +614,8 @@ fn lower_expression<'a, 'b, 'c>(
                     (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::LessEq => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::LessEq, left: left_type, right: right_type });
                     }
 
                     let op = match (left_type.is_float(), left_type.is_signed()) {
@@ -552,8 +626,8 @@ fn lower_expression<'a, 'b, 'c>(
                     (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::Greater => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Greater, left: left_type, right: right_type });
                     }
 
                     let op = match (left_type.is_float(), left_type.is_signed()) {
@@ -564,8 +638,8 @@ fn lower_expression<'a, 'b, 'c>(
                     (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::GreaterEq => {
-                    if left_type != right_type || left_type == RegisterType::Bool || matches!(left_type, RegisterType::Ptr(_)) {
-                        panic!();
+                    if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::GreaterEq, left: left_type, right: right_type });
                     }
 
                     let op = match (left_type.is_float(), left_type.is_signed()) {
@@ -577,7 +651,7 @@ fn lower_expression<'a, 'b, 'c>(
                 },
                 ASTbinaryOperator::Eq => {
                     if left_type != right_type {
-                        panic!();
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Eq, left: left_type, right: right_type });
                     }
 
                     let op = match left_type.is_float() {
@@ -588,8 +662,7 @@ fn lower_expression<'a, 'b, 'c>(
                 },
                 ASTbinaryOperator::NotEq => {
                     if left_type != right_type {
-                        println!("LEFT: {:?}, RIGHT: {:?}", left_type, right_type);
-                        panic!();
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::NotEq, left: left_type, right: right_type });
                     }
 
                     let op = match left_type.is_float() {
@@ -600,7 +673,7 @@ fn lower_expression<'a, 'b, 'c>(
                 },
                 ASTbinaryOperator::Index => {
                     if !left_type.is_ptr() || !(right_type.is_int() && right_type.size() == 64) {
-                        panic!();
+                        return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Index, left: left_type, right: right_type });
                     }
 
                     *stack_size += 8;
@@ -625,9 +698,9 @@ fn lower_expression<'a, 'b, 'c>(
 
                     instructions.push(Instruction::Load { size: left_type.ptr_element_size() as u8, destination: *stack_size, address: *stack_size });
 
-                    let return_type = if let RegisterType::Ptr(VariableType::Primitive(prim)) = left_type { prim } else { panic!(); };
+                    let return_type = if let RegisterType::Ptr(VariableType::Primitive(prim)) = left_type { prim } else { panic!("left type is not a pointer"); };
 
-                    return Some((*stack_size, return_type.clone()));
+                    return Ok(Some((*stack_size, *return_type)));
                 },
             };
 
@@ -640,15 +713,15 @@ fn lower_expression<'a, 'b, 'c>(
                 left: left_offset, 
                 right: right_offset, 
             });
-            return Some((*stack_size, op.1));
+            return Ok(Some((*stack_size, op.1)));
         },
         Expression::UnaryOperator { operator, expr } => {
-            let (offset, typ) = lower_expression(expr, arena, stack_size, instructions, variables, functions).unwrap();
+            let (offset, typ) = lower_expression(expr, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
             match operator {
                 ASTunaryOperator::Sub => {
                     if !typ.is_int() {
-                        panic!();
+                        return Err(IRerror::UnaryOperatorType { operator: ASTunaryOperator::Sub, found: typ });
                     } 
                     let size = typ.size();
                     *stack_size += 8;
@@ -660,11 +733,11 @@ fn lower_expression<'a, 'b, 'c>(
                         left: *stack_size, 
                         right: offset,
                     });
-                    return Some((*stack_size, typ));
+                    return Ok(Some((*stack_size, typ)));
                 },
                 ASTunaryOperator::Not => {
                     if !typ.is_int() {
-                        panic!();
+                        return Err(IRerror::UnaryOperatorType { operator: ASTunaryOperator::Not, found: typ });
                     } 
                     let size = typ.size();
                     *stack_size += 8;
@@ -676,11 +749,11 @@ fn lower_expression<'a, 'b, 'c>(
                         left: offset, 
                         right: *stack_size,
                     });
-                    return Some((*stack_size, typ));
+                    return Ok(Some((*stack_size, typ)));
                 },
                 ASTunaryOperator::Invert => {
                     if typ != RegisterType::Bool {
-                        panic!();
+                        return Err(IRerror::UnaryOperatorType { operator: ASTunaryOperator::Invert, found: typ });
                     } 
                     *stack_size += 8;
                     instructions.push(Instruction::Immediate { destination: *stack_size, value: 1 });
@@ -691,50 +764,43 @@ fn lower_expression<'a, 'b, 'c>(
                         left: offset, 
                         right: *stack_size,
                     });
-                    return Some((*stack_size, typ));
+                    return Ok(Some((*stack_size, typ)));
                 },
                 ASTunaryOperator::Dereference => {
-                    if let RegisterType::Ptr(var_typ) = typ.clone() {
-                        if let VariableType::Primitive(prim) = var_typ {
-                            *stack_size += 8;
-                            instructions.push(Instruction::Load { size: (typ.ptr_element_size()) as u8, destination: *stack_size, address: offset });
-                            return Some((*stack_size, prim.clone()));
-                        }
-                        else { panic!(); }
+                    if let RegisterType::Ptr(VariableType::Primitive(prim)) = typ {
+                        *stack_size += 8;
+                        instructions.push(Instruction::Load { size: (typ.ptr_element_size()) as u8, destination: *stack_size, address: offset });
+                        return Ok(Some((*stack_size, *prim)));
                     }
-                    else { panic!(); }
+                    else { 
+                        return Err(IRerror::UnaryOperatorType { operator: ASTunaryOperator::Dereference, found: typ });
+                    }
                 },
                 ASTunaryOperator::Address => {
                     let typ = RegisterType::Ptr(VariableType::Primitive(arena.alloc(typ)));
                     *stack_size += 8;
                     instructions.push(Instruction::AddrOf { source: offset, destination: *stack_size });
-                    return Some((*stack_size, typ));
+                    return Ok(Some((*stack_size, typ)));
                 },
             };
         },
         Expression::Cast { expr, typ } => {
             // TODO: pointer casts
 
-            let (offset, left_t) = lower_expression(expr, arena, stack_size, instructions, variables, functions).unwrap();
+            let (offset, left_t) = lower_expression(expr, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
-            let cast_type = type_to_register(typ, arena);
+            let cast_type = type_to_register(typ, arena)?;
             let cast_size = cast_type.size();
-
-            if left_t.is_ptr() {
-                panic!();
-            }
-
-            if left_t == RegisterType::Bool && cast_type.is_float() {
-                panic!();
-            }
-
-            if left_t == cast_type {
-                panic!();
-            }
 
             *stack_size += 8;
 
-            if left_t.is_float() && cast_type.is_float() {
+            if left_t == cast_type {
+                instructions.push(Instruction::Move { source: offset, destination: *stack_size });
+            }
+            else if left_t.is_ptr() && cast_type.is_ptr() {
+                instructions.push(Instruction::Move { source: offset, destination: *stack_size });
+            }
+            else if left_t.is_float() && cast_type.is_float() {
                 instructions.push(Instruction::ExtendTruncate { 
                     typ: if left_t == RegisterType::F32 { ExtTruncType::Fextend } else { ExtTruncType::Ftruncate }, 
                     source: offset, 
@@ -760,7 +826,7 @@ fn lower_expression<'a, 'b, 'c>(
             }
             else if left_t.is_float() && cast_type == RegisterType::Bool {
                 instructions.push(Instruction::ImmediateFloat { 
-                    typ: if left_t.size() == 32 { "f32" } else { "f64" }, 
+                    long: if left_t.size() == 32 { false } else { true }, 
                     destination: *stack_size, 
                     value: 0.0 
                 });
@@ -791,21 +857,24 @@ fn lower_expression<'a, 'b, 'c>(
                 });
             }
             else {
-                panic!();
+                return Err(IRerror::CastType { exp_type: left_t, cast_type });
             }
-            return Some((*stack_size, cast_type));
+            return Ok(Some((*stack_size, cast_type)));
         },
         Expression::Call { name, parameters } => {
             let register_paratemers = arena.alloc_array(0u32, parameters.len());
-            let function = functions.iter().find(|x| x.name == *name).unwrap();
+            let function = functions.iter().find(|x| x.name == *name).ok_or(IRerror::FunctionNotFound { name: arena.alloc_slice(name) })?;
+            if function.parameters.len() != parameters.len() { 
+                return Err(IRerror::CallParametersCount { expected: function.parameters.len()as u8, found: parameters.len()as u8 });
+            }
 
             for (i, par) in parameters.iter().enumerate() {
-                let (offset, expression_type) = lower_expression(par, arena, stack_size, instructions, variables, functions).unwrap();
+                let (offset, expression_type) = lower_expression(par, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
                 register_paratemers[i] = offset;
             
-                let this_type = type_to_register(&function.parameters[i].0, arena);
+                let this_type = type_to_register(&function.parameters[i].0, arena)?;
                 if this_type != expression_type {
-                    panic!();
+                    return Err(IRerror::ParameterType { expected: this_type, found: expression_type });
                 }  
             }
 
@@ -815,18 +884,14 @@ fn lower_expression<'a, 'b, 'c>(
                 register_paratemers as &[u32],  
                 *stack_size,
             ))));
-            if function.return_type.is_none() {
-                return None;
-            }
-            return Some((*stack_size, type_to_register(&function.return_type.clone().unwrap(), arena)));
+            return match function.return_type.clone() {
+                Some(ret_type) => Ok(Some((*stack_size, type_to_register(&ret_type, arena)?))),
+                None =>  Ok(None),
+            };
         },
         Expression::Field { expr: _, field: _ } => todo!(),
         Expression::ArrayInit(expressions) => {
-            if expressions.len() == 0 {
-                panic!();
-            }
-            
-            let (exp_offset, array_type) = lower_expression(&expressions[0], arena, stack_size, instructions, variables, functions).unwrap();
+            let (exp_offset, array_type) = lower_expression(&expressions[0], arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
             
             *stack_size += array_type.size() as u32 / 8 * expressions.len() as u32;
             *stack_size = stack_size.next_multiple_of(8);
@@ -843,10 +908,10 @@ fn lower_expression<'a, 'b, 'c>(
             instructions.push(Instruction::Store { size: array_type.size() as u8, source: exp_offset, address: array_ptr_offset });
             
             for e in expressions[1..].iter() {
-                let (exp_offset, exp_type) = lower_expression(e, arena, stack_size, instructions, variables, functions).unwrap();
+                let (exp_offset, exp_type) = lower_expression(e, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
                 if exp_type != array_type {
-                    panic!();
+                    return Err(IRerror::ArrayElementType { expected: array_type, found: exp_type });
                 }
                 
                 instructions.push(Instruction::BinaryOperation { size: 64, operation: IRbinaryOperator::Add, destination: array_ptr_offset, left: array_ptr_offset, right: element_size_offset });
@@ -854,8 +919,8 @@ fn lower_expression<'a, 'b, 'c>(
             }
             instructions.push(Instruction::AddrOf { source: array_start_offset, destination: array_ptr_offset });
 
-            let ret_type = RegisterType::Ptr(VariableType::Primitive(arena.alloc(array_type.clone())));
-            return Some((array_ptr_offset, ret_type));
+            let ret_type = RegisterType::Ptr(VariableType::Primitive(arena.alloc(array_type)));
+            return Ok(Some((array_ptr_offset, ret_type)));
         },
         Expression::StructInit(_) => todo!(),
     }
@@ -869,64 +934,63 @@ fn lower_statement<'a, 'b, 'c>(
     return_type: Option<RegisterType<'c>>,
     last_loop_start: Option<i32>,
     functions: &[ASTfunction],
-) -> Option<()> {
+) -> Result<(), IRerror<'c>> {
     match statement {
         Statement::Assignment { destination, value } => {
-            let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let value = lower_expression(value, arena, stack_size, instructions, variables, functions);
+            let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
+            let value = lower_expression(value, arena, stack_size, instructions, variables, functions)?;
+            
 
             if let Some(d) = destination {
+                let value = value.ok_or(IRerror::EmptyType)?;
                 if let Expression::Name(n) = d {
-                    let (_, dest_offset, dest_type) = variables.iter().find(|x| &x.0 == n).unwrap();
+                    let (_, dest_offset, dest_type) = variables.iter().find(|x| &x.0 == n)
+                        .ok_or(IRerror::VarNameNotFound { name: arena.alloc_slice(n) })?;
 
-                    if *dest_type != value.clone().unwrap().1 {
-                        panic!();
+                    if *dest_type != value.1 {
+                        return Err(IRerror::AssignmentType { expr: value.1, destination: *dest_type });
                     }
 
-                    instructions.push(Instruction::Move { source: value.unwrap().0, destination: *dest_offset });
+                    instructions.push(Instruction::Move { source: value.0, destination: *dest_offset });
                 }
                 else if let Expression::UnaryOperator { operator, expr } = d {
                     if *operator != ASTunaryOperator::Dereference {
-                        panic!();
+                        return Err(IRerror::LeftsideOpNotDeref);
                     }
                     if let Expression::Name(n) = expr { 
-                        let ptr = variables.iter().find(|x| x.0 == *n).unwrap();
-                        if !ptr.2.is_ptr() { panic!(); }
-
-                        if let RegisterType::Ptr(VariableType::Primitive(prim)) = ptr.2 {
-                            if *prim != value.clone().unwrap().1 { panic!(); }
+                        let ptr = variables.iter().find(|x| x.0 == *n)
+                            .ok_or(IRerror::VarNameNotFound { name: arena.alloc_slice(n) })?;
+                        if !ptr.2.is_ptr() { 
+                            return Err(IRerror::UnaryOperatorType { operator: ASTunaryOperator::Dereference, found: ptr.2 });
                         }
-                        instructions.push(Instruction::Store { size: value.clone().unwrap().1.size(), source: value.unwrap().0, address: ptr.1 });
+                        instructions.push(Instruction::Store { size: value.1.size(), source: value.0, address: ptr.1 });
                     }
-                    else { panic!(); }
+                    else { 
+                        return Err(IRerror::LeftsideDerefNotVar);
+                    }
                 }
-                else { panic!() }  
+                else { 
+                    return Err(IRerror::LeftsideInvalidExpr);
+                }  
             }
         },
         Statement::Return { value } => {
-            let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let value_reg = if let Some(v) = value {
-                let (value_offset, value_type) = lower_expression(v, arena, stack_size, instructions, variables, functions).unwrap();
-                if return_type.is_none() || return_type.unwrap() != value_type {
-                    panic!();
-                }
-                Some(value_offset)
-            }
-            else {
-                if return_type.is_some() {
-                    panic!();
-                } 
-                None 
+            let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
+            let value = match value {
+                Some(v) => lower_expression(v, arena, stack_size, instructions, variables, functions)?,
+                None => None,
             };
-
-            instructions.push(Instruction::Return { value: value_reg });
+            if value.map(|x| x.1) != return_type {
+                return Err(IRerror::ReturnType { expected: return_type, found: value.map(|x| x.1) });
+            }
+            instructions.push(Instruction::Return { value: value.map(|x| x.0) });
         },
         Statement::If { condition, body, else_body } => {
-            let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions).unwrap();
+            let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
+            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
             if c_type != RegisterType::Bool {
-                panic!();
+                return Err(IRerror::ConditionType { found: c_type });
             }
 
             *stack_size += 8;
@@ -947,14 +1011,14 @@ fn lower_statement<'a, 'b, 'c>(
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), last_loop_start, functions).unwrap();
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions)?;
             }
 
             variables.truncate(var_len);
 
             let next_index = blocks.len();
 
-            blocks.get_mut(condition_index).unwrap().instructions.push(Instruction::Branch { 
+            blocks.get_mut(condition_index).expect("saved index").instructions.push(Instruction::Branch { 
                 condition: condition_reg, 
                 label: next_index as i32, 
             });
@@ -967,7 +1031,7 @@ fn lower_statement<'a, 'b, 'c>(
                 let var_len = variables.len();
 
                 for s in *e {
-                    lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), last_loop_start, functions).unwrap();
+                    lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions)?;
                 }
 
                 while variables.len() > var_len {
@@ -976,7 +1040,7 @@ fn lower_statement<'a, 'b, 'c>(
 
                 let next_index = blocks.len();
 
-                blocks.get_mut(jump_index).unwrap().instructions.push(Instruction::Jump {  
+                blocks.get_mut(jump_index).expect("saved index").instructions.push(Instruction::Jump {  
                     label: next_index as i32, 
                 });
             }
@@ -987,11 +1051,11 @@ fn lower_statement<'a, 'b, 'c>(
             blocks.push(Block { instructions: arena.vec_capacity(16) });
             let condition_block_index = blocks.len()-1;
 
-            let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions).unwrap();
+            let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
+            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
             if c_type != RegisterType::Bool {
-                panic!();
+                return Err(IRerror::ConditionType { found: c_type });
             }
 
             *stack_size += 8;
@@ -1012,20 +1076,20 @@ fn lower_statement<'a, 'b, 'c>(
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), Some(condition_block_index as i32), functions).unwrap();
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions)?;
             }
 
             while variables.len() > var_len {
                 variables.pop();
             }
 
-            blocks.last_mut().unwrap().instructions.push(Instruction::Jump { 
+            blocks.last_mut().expect("there is always atleast 1 block").instructions.push(Instruction::Jump { 
                 label: condition_block_index as i32, 
             });
 
             let next_block_index = blocks.len();
 
-            blocks.get_mut(condition_block_index).unwrap().instructions.push(Instruction::Branch { 
+            blocks.get_mut(condition_block_index).expect("saved index").instructions.push(Instruction::Branch { 
                 condition: condition_reg, 
                 label: next_block_index as i32, 
             });
@@ -1035,23 +1099,25 @@ fn lower_statement<'a, 'b, 'c>(
         Statement::Break => todo!(),
         Statement::Continue => {
             if let Some(i) = last_loop_start {
-                blocks.last_mut().unwrap().instructions.push(Instruction::Jump { label: i });
+                blocks.last_mut().expect("blocks have len of atleast 1").instructions.push(Instruction::Jump { label: i });
             }
-            else { panic!(); }
+            else { 
+                return Err(IRerror::BreakOutsideLoop);
+            }
         },
         Statement::Declaration { typ, name, value } => {
-            let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let reg_t = type_to_register(typ, arena);
+            let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
+            let reg_t = type_to_register(typ, arena)?;
 
             if variables.iter().rev().find(|x| &x.0 == name).is_some() {
-                panic!();
+                return Err(IRerror::DuplicateVariableName { name: arena.alloc_slice(name) });
             }
 
             if let Some(v) = value {
-                let (value_offset, value_type) = lower_expression(v, arena, stack_size, instructions, variables, functions).unwrap();
+                let (value_offset, value_type) = lower_expression(v, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
                 
                 if value_type != reg_t {
-                    panic!();
+                    return Err(IRerror::DeclarationDestinationType { expected: reg_t, found: value_type });
                 }
                 variables.push((name, value_offset, reg_t));
             }
@@ -1064,18 +1130,18 @@ fn lower_statement<'a, 'b, 'c>(
             let var_len = variables.len();
 
             if let Some(d) = declaration {
-                lower_statement(d, arena, stack_size, blocks, variables, return_type.clone(), last_loop_start, functions).unwrap();
+                lower_statement(d, arena, stack_size, blocks, variables, return_type, last_loop_start, functions)?;
             }
             
             blocks.push(Block { instructions: arena.vec_capacity(16) });
             let condition_block_index = blocks.len()-1;
 
-            let instructions = &mut blocks.last_mut().unwrap().instructions;
+            let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
             let condition_reg = if let Some(cond) = condition {
-                let (c_offset, c_type) = lower_expression(cond, arena, stack_size, instructions, variables, functions).unwrap();
+                let (c_offset, c_type) = lower_expression(cond, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
                 if c_type != RegisterType::Bool {
-                    panic!();
+                    return Err(IRerror::ConditionType { found: c_type });
                 }
 
                 *stack_size += 8;
@@ -1096,31 +1162,31 @@ fn lower_statement<'a, 'b, 'c>(
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), Some(condition_block_index as i32), functions).unwrap();
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions)?;
             }
 
             if let Some(ite) = iteration {
-                lower_statement(ite, arena, stack_size, blocks, variables, return_type.clone(), Some(condition_block_index as i32), functions).unwrap();
+                lower_statement(ite, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions)?;
             }
 
             while variables.len() > var_len {
                 variables.pop();
             }
 
-            blocks.last_mut().unwrap().instructions.push(Instruction::Jump { 
+            blocks.last_mut().expect("blocks have len of atleast 1").instructions.push(Instruction::Jump { 
                 label: condition_block_index as i32, 
             });
 
             let next_block_index = blocks.len();
 
             if let Some(cond_reg) = condition_reg {
-                blocks.get_mut(condition_block_index).unwrap().instructions.push(Instruction::Branch { 
+                blocks.get_mut(condition_block_index).expect("saved index").instructions.push(Instruction::Branch { 
                     condition: cond_reg, 
                     label: next_block_index as i32, 
                 });
             }
             else {
-                blocks.get_mut(condition_block_index).unwrap().instructions.push(Instruction::Jump {  
+                blocks.get_mut(condition_block_index).expect("saved index").instructions.push(Instruction::Jump {  
                     label: next_block_index as i32, 
                 });
             }
@@ -1134,23 +1200,23 @@ fn lower_statement<'a, 'b, 'c>(
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type.clone(), Some(start_block_index as i32), functions).unwrap();
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(start_block_index as i32), functions)?;
             }
 
             while variables.len() > var_len {
                 variables.pop();
             }
 
-            let instructions = &mut blocks.last_mut().unwrap().instructions;
-            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions).unwrap();
+            let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
+            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
             if c_type != RegisterType::Bool {
-                panic!();
+                return Err(IRerror::ConditionType { found: c_type });
             }
 
             let next_block_index = blocks.len();
 
-            blocks.get_mut(start_block_index).unwrap().instructions.push(Instruction::Branch { 
+            blocks.get_mut(start_block_index).expect("saved index").instructions.push(Instruction::Branch { 
                 condition: c_offset, 
                 label: next_block_index as i32, 
             });
@@ -1159,11 +1225,13 @@ fn lower_statement<'a, 'b, 'c>(
         },
         Statement::Switch { value: _, arms: _, default: _ } => todo!(),
     }
-    return Some(());
+    return Ok(());
 }
-fn type_to_register<'b>(typ: &Type, arena: &'b Arena) -> RegisterType<'b> {
+fn type_to_register<'b>(typ: &Type, arena: &'b Arena) -> Result<RegisterType<'b>, IRerror<'b>> {
     match typ {
-        Type::Name(name) => RegisterType::from_str(*name).unwrap(),
-        Type::Pointer(ptr) => RegisterType::Ptr(VariableType::Primitive(arena.alloc(type_to_register(ptr, arena)))),
+        Type::Name(name) => {
+            RegisterType::from_str(arena.alloc_slice(name)).ok_or(IRerror::InvalidType { typ: arena.alloc_slice(name) })
+        },
+        Type::Pointer(ptr) => Ok(RegisterType::Ptr(VariableType::Primitive(arena.alloc(type_to_register(ptr, arena)?)))),
     }
 }

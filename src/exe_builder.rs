@@ -1,25 +1,18 @@
-use std::fs::{File, write};
-use std::io::Write;
+pub fn build(instructions: &[u8]) -> Vec<u8> {
+    let mut buffer = build_pe_header(instructions.len() as u32);
+    build_idata_section(&mut buffer);
 
-pub fn build(
-    instructions: &mut Vec<u8>, 
-    output_path: &str,
-) {
-    let buffer = Vec::new();
+    buffer.extend_from_slice(instructions);
 
-    let buffer = build_header(buffer, instructions.len() as u32);
-    let buffer = build_idata_section(buffer);
-
-    write(output_path, buffer).unwrap();
-
-    while instructions.len() % 512 != 0 {
-        instructions.push(0xC3);
+    while buffer.len() % 512 != 0 {
+        buffer.push(0xC3);
     }
 
-    File::options().append(true).open(output_path).unwrap().write(instructions).unwrap();
+    return buffer;
 }
-fn build_header(vec: Vec<u8>, code_size: u32) -> Vec<u8> {
-    let mut builder = BinaryBuilder::with_vec(vec);
+fn build_pe_header(code_size: u32) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    let mut builder = BinaryBuilder::with_vec(&mut buffer);
     let start_size = builder.len();
 
     // DOS header
@@ -61,7 +54,7 @@ fn build_header(vec: Vec<u8>, code_size: u32) -> Vec<u8> {
     builder.push_u16_le(6); // major subsystem version
     builder.push_u16_le(0); // minor subsystem version
     builder.push_u32_le(0); // Win32version value, must be zero
-    builder.push_u32_le(0x3000); // size of image -------------IMPORTANT
+    builder.push_u32_le(0x2000 + code_size.next_multiple_of(0x1000)); // size of image
     builder.push_u32_le(0x200); // size of headers
     builder.push_u32_le(0); // checksum
     builder.push_u16_le(3); // subsystem
@@ -120,9 +113,9 @@ fn build_header(vec: Vec<u8>, code_size: u32) -> Vec<u8> {
     builder.push_slice(&[0; 104]);
     assert_eq!(builder.len(), start_size + 512);
 
-    return builder.to_vec();
+    return buffer;
 }
-fn build_idata_section(buffer: Vec<u8>) -> Vec<u8> {
+fn build_idata_section(buffer: &mut Vec<u8>) {
     let mut builder = BinaryBuilder::with_vec(buffer);
     let start_size = builder.len();
 
@@ -173,14 +166,12 @@ fn build_idata_section(buffer: Vec<u8>) -> Vec<u8> {
     // Pad section to 512 bytes
     builder.push_slice(&[0; 0x200 - 0xC2]);
     assert_eq!(builder.len(), start_size + 512);
-
-    return builder.to_vec();
 }
-struct BinaryBuilder {
-    buffer: Vec<u8>,
+struct BinaryBuilder<'a> {
+    buffer: &'a mut Vec<u8>,
 }
-impl BinaryBuilder {
-    fn with_vec(vec: Vec<u8>) -> BinaryBuilder {
+impl<'a> BinaryBuilder<'a> {
+    fn with_vec(vec: &mut Vec<u8>) -> BinaryBuilder<'_> {
         BinaryBuilder { buffer: vec }
     }
     fn push_u8_le(&mut self, value: u8) {
@@ -200,8 +191,5 @@ impl BinaryBuilder {
     }
     fn len(&self) -> usize {
         self.buffer.len()
-    }
-    fn to_vec(self) -> Vec<u8> {
-        self.buffer
     }
 }

@@ -129,6 +129,16 @@ impl<'a, T> VecArena<'a, T> {
             }
         }
     }
+    pub fn get(&self, index: usize) -> Option<&T> {
+        if index >= self.len {
+            None
+        }
+        else {
+            unsafe {
+                Some(&*self.buffer.add(index))
+            }
+        }
+    }
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;

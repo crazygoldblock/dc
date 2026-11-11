@@ -1,4 +1,4 @@
-pub struct Tokenizer<'a> {
+pub struct Lexer<'a> {
     buffer: &'a [u8],
     state: State,
     index: usize,
@@ -37,9 +37,9 @@ enum State {
     BlockComment{ depth: usize },
     Name{start: usize},
 }
-impl<'a> Tokenizer<'a> {
-    pub fn new<'b>(input: &'b [u8]) -> Tokenizer<'b> {
-        Tokenizer { buffer: input, state: State::Start, index: 0, last: &[] }
+impl<'a> Lexer<'a> {
+    pub fn new<'b>(input: &'b [u8]) -> Lexer<'b> {
+        Lexer { buffer: input, state: State::Start, index: 0, last: &[] }
     }
     pub fn peek(&mut self) -> Result<Token<'a>, TokenError<'a>> {
         let cp = self.checkpoint();
@@ -149,7 +149,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
     pub fn restore(&mut self, checkpoint: Checkpoint<'a>) {
-        *self = Tokenizer { 
+        *self = Lexer { 
             buffer: self.buffer, 
             state: checkpoint.state, 
             index: checkpoint.index, 

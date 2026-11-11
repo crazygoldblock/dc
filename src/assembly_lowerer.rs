@@ -9,12 +9,13 @@ pub fn lower_function<'b>(
     function: &IRfunction,
     instructions: &mut Vec<u8>,
     arena: &'b Arena,
+    temp: &Arena,
     function_calls: &mut Vec<(&'b [u8], usize)>,
 ) {
     let stack_size = function.paramaters_count as u32 * 8 + 8;
 
-    let mut jumps = Vec::new();
-    let mut labels = Vec::new();
+    let mut jumps = temp.vec_capacity(16);
+    let mut labels = temp.vec_capacity(16);
 
     instructions.extend_from_slice(&[
         // mov rbp, rsp
@@ -39,22 +40,21 @@ pub fn lower_function<'b>(
                     
                     store(instructions, *destination, Register::Rax);
                 },
-                Instruction::ImmediateFloat { typ, destination, value } => {
-                    if *typ == "f64" {
+                Instruction::ImmediateFloat { long, destination, value } => {
+                    if *long {
                         // mov rax [value]
                         instructions.extend_from_slice(&[0x48, 0xB8]);
                         instructions.extend_from_slice(&value.to_le_bytes());
                     
                         store(instructions, *destination, Register::Rax);
                     }
-                    else if *typ == "f32" {
+                    else {
                         // mov eax [value]
                         instructions.push(0xB8);
                         instructions.extend_from_slice(&(*value as f32).to_le_bytes());
 
                         store(instructions, *destination, Register::Rax);
                     }
-                    else { panic!(); }
                 },
                 Instruction::Load { size, destination, address } => {
                     load(instructions, *address, 64, Register::Rax);
@@ -831,9 +831,9 @@ pub fn lower_function<'b>(
         }
     }
 
-    for (jmp, label) in jumps {
-        let offset = labels[label as usize] as i32 - jmp as i32 - 4;
-        instructions[jmp..jmp+4].copy_from_slice(&offset.to_le_bytes());
+    for (jmp, label) in jumps.array() {
+        let offset = *labels.get(*label as usize).unwrap() as i32 - *jmp as i32 - 4;
+        instructions[*jmp..*jmp+4].copy_from_slice(&offset.to_le_bytes());
     }
 }
 fn load(instructions: &mut Vec<u8>, source: u32, size: u8, register: Register) {

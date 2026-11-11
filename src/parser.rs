@@ -1,4 +1,4 @@
-use crate::{arena::Arena, lexer::{TokenError, Tokenizer}};
+use crate::{arena::Arena, lexer::{TokenError, Lexer}};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Expression<'a, 'b> {
@@ -7,7 +7,7 @@ pub enum Expression<'a, 'b> {
         value: u64,
     },
     Float{
-        typ: &'static str,
+        long: bool,
         value: f64,
     },
     Bool(bool),
@@ -216,7 +216,7 @@ pub enum Fragment<'a, 'b> {
     Union(Union<'a, 'b>),
     GlobalVariable(GlobalVariable<'a, 'b>),
 }
-pub fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Fragment<'a, 'b>, ParseError<'a>> {
+pub fn parse_file<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<Fragment<'a, 'b>, ParseError<'a>> {
     if tokens.peek().is_err() {
         return Err(ParseError::EndOfFile);
     }
@@ -242,7 +242,7 @@ pub fn parse_file<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Resul
     }
     return Ok(Fragment::ASTfunction(parse_function(tokens, arena, public)?));
 }
-fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<GlobalVariable<'a, 'b>, ParseError<'a>> {
+fn parse_global_var<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena, public: bool) -> Result<GlobalVariable<'a, 'b>, ParseError<'a>> {
     expect_keyword(tokens, "static")?;
     
     let typ = parse_type(tokens, arena)?;
@@ -257,7 +257,7 @@ fn parse_global_var<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public
     expect_symbol(tokens, ";")?;
     return Ok(GlobalVariable { public, name: name, typ, value });
 }
-fn parse_include<'a>(tokens: &mut Tokenizer<'a>) -> Result<Include<'a>, ParseError<'a>> {
+fn parse_include<'a>(tokens: &mut Lexer<'a>) -> Result<Include<'a>, ParseError<'a>> {
     expect_keyword(tokens, "include")?;
     let index = tokens.index();
     while tokens.next()? != ";" {}
@@ -265,7 +265,7 @@ fn parse_include<'a>(tokens: &mut Tokenizer<'a>) -> Result<Include<'a>, ParseErr
     let path = &tokens.buffer()[index..tokens.index()];
     Ok(Include{ path: path })
 }
-fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<ASTfunction<'a, 'b>, ParseError<'a>> {
+fn parse_function<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena, public: bool) -> Result<ASTfunction<'a, 'b>, ParseError<'a>> {
     let return_type = if tokens.peek()? != "void" {
         Some(parse_type(tokens, &arena)?)
     }
@@ -295,14 +295,14 @@ fn parse_function<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
         body
     });
 }
-fn parse_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Type<'a, 'b>, ParseError<'a>> {
+fn parse_type<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<Type<'a, 'b>, ParseError<'a>> {
     if tokens.peek()? == "*" {
         tokens.next()?;
         return Ok(Type::Pointer(arena.alloc(parse_type(tokens, arena)?)));
     }
     return Ok(Type::Name(next_identifier(tokens)?));
 }
-fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Expression<'a, 'b>, ParseError<'a>> {
+fn parse_expression<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<Expression<'a, 'b>, ParseError<'a>> {
     let mut bracket_depth = 0;
     let e = parse_binary_expression(tokens, arena, 0, &mut bracket_depth)?;
     if bracket_depth != 0 {
@@ -310,7 +310,7 @@ fn parse_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Res
     }
     Ok(e)
 }
-fn parse_binary_expression<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, min_precedence: i8, bracket_depth: &mut usize) -> Result<Expression<'a, 'b>, ParseError<'a>> {
+fn parse_binary_expression<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena, min_precedence: i8, bracket_depth: &mut usize) -> Result<Expression<'a, 'b>, ParseError<'a>> {
 
     let mut left = if tokens.peek()? == "(" {
         tokens.next().unwrap();
@@ -398,10 +398,13 @@ fn token_to_unary_operator(token: &[u8]) -> Option<ASTunaryOperator> {
         _ => return None,
     })
 }
-fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Expression<'a, 'b>, ParseError<'a>> {
+fn parse_primary<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<Expression<'a, 'b>, ParseError<'a>> {
     if tokens.peek()? == "[" {
         tokens.next().unwrap();
         let mut parameters = arena.vec_capacity(16);
+
+        parameters.push(parse_expression(tokens, &arena)?);
+        if tokens.peek()? == "," { tokens.next().unwrap(); }
         
         while tokens.peek()? != "]" {
             parameters.push(parse_expression(tokens, &arena)?);
@@ -434,7 +437,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result
         }
         tokens.restore(cp);
         if let Some(f) = parse_float(tokens) {
-            return Ok(Expression::Float { typ: f.1, value: f.0 });
+            return Ok(Expression::Float { long: f.1, value: f.0 });
         }
         return Err(ParseError::ExpectedNumberLiteral { line: tokens.get_current_line() });
     }
@@ -492,7 +495,7 @@ fn parse_primary<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result
     }
     Ok(expr)
 }
-fn parse_integer(tokens: &mut Tokenizer) -> Option<(u64, &'static str)> {
+fn parse_integer(tokens: &mut Lexer) -> Option<(u64, &'static str)> {
     fn check(value: i128, signed: bool, max: i128) -> Option<i128> {
         if signed {
             if value > max/2 || value < -(max/2+1) {
@@ -539,7 +542,7 @@ fn parse_integer(tokens: &mut Tokenizer) -> Option<(u64, &'static str)> {
     result *= sign;
     return Some((check(result, true, u32::MAX as i128)? as u64, "i32"));
 }
-fn parse_float(tokens: &mut Tokenizer) -> Option<(f64, &'static str)> {
+fn parse_float(tokens: &mut Lexer) -> Option<(f64, bool)> {
     let mut first = tokens.next().ok()?;
     
     let sign = if first == "-" { -1.0 } else { 1.0 }; 
@@ -566,15 +569,15 @@ fn parse_float(tokens: &mut Tokenizer) -> Option<(f64, &'static str)> {
         if !input_right[i].is_ascii_digit() {
             result *= sign;
             match &input_right[i..] {
-                b"f32" => return Some((result, "f32")),
-                b"f64" => return Some((result, "f64")),
+                b"f32" => return Some((result, false)),
+                b"f64" => return Some((result, true)),
                 _ => return None,
             }
         }
         result += ((input_right[i] - b'0') as f64) * (0.1f64).powi(i as i32 +1);
     }
     result *= sign;
-    return Some((result, "f32"));
+    return Some((result, false));
 }
 fn get_operator_precedence(op: &[u8]) -> i8 {
     match op {
@@ -592,7 +595,7 @@ fn get_operator_precedence(op: &[u8]) -> i8 {
         _ => -1,
     }
 }
-fn parse_body<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<&'b [Statement<'a, 'b>], ParseError<'a>> {
+fn parse_body<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<&'b [Statement<'a, 'b>], ParseError<'a>> {
     expect_symbol(tokens, "{")?;
     let mut statements = arena.vec_capacity(16);
 
@@ -603,7 +606,7 @@ fn parse_body<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<&'
 
     Ok(statements.array())
 }
-fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Statement<'a, 'b>, ParseError<'a>> {
+fn parse_statement<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<Statement<'a, 'b>, ParseError<'a>> {
     if tokens.peek()? == "return" {
         tokens.next().unwrap();
 
@@ -731,7 +734,7 @@ fn parse_statement<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Resu
     let d = parse_declaration(tokens, arena)?;
     return Ok(Statement::Declaration { typ: d.1, name: d.0, value: d.2 });
 }
-fn parse_struct<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<Struct<'a, 'b>, ParseError<'a>> {
+fn parse_struct<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena, public: bool) -> Result<Struct<'a, 'b>, ParseError<'a>> {
     expect_keyword(tokens, "struct")?;
 
     let name = next_identifier(tokens)?;
@@ -740,7 +743,7 @@ fn parse_struct<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bo
 
     return Ok(Struct { public, name: name, fields });
 }
-fn parse_union<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<Union<'a, 'b>, ParseError<'a>> {
+fn parse_union<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena, public: bool) -> Result<Union<'a, 'b>, ParseError<'a>> {
     expect_keyword(tokens, "union")?;
 
     let name = next_identifier(tokens)?;
@@ -749,7 +752,7 @@ fn parse_union<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: boo
 
     return Ok(Union { public, name: name, fields });
 }
-fn parse_composite_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<&'b [(Type<'a, 'b>, &'a [u8])], ParseError<'a>> {
+fn parse_composite_type<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<&'b [(Type<'a, 'b>, &'a [u8])], ParseError<'a>> {
     expect_symbol(tokens, "{")?;
 
     let mut fields = arena.vec_capacity(16);
@@ -768,7 +771,7 @@ fn parse_composite_type<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) ->
 
     return Ok(fields.array());
 }
-fn parse_constant<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: bool) -> Result<Constant<'a, 'b>, ParseError<'a>> {
+fn parse_constant<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena, public: bool) -> Result<Constant<'a, 'b>, ParseError<'a>> {
     expect_keyword(tokens, "const")?;
 
     let decl = parse_declaration(tokens, arena)?;
@@ -776,7 +779,7 @@ fn parse_constant<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena, public: 
 
     return Ok(Constant { public, name: decl.0, typ: decl.1, value });
 }
-fn parse_declaration<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<(&'a [u8], Type<'a, 'b>, Option<Expression<'a, 'b>>), ParseError<'a>> {
+fn parse_declaration<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<(&'a [u8], Type<'a, 'b>, Option<Expression<'a, 'b>>), ParseError<'a>> {
     let t = parse_type(tokens, arena)?;
     let name = next_identifier(tokens)?;
 
@@ -789,7 +792,7 @@ fn parse_declaration<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Re
     
     Ok((name, t, value))
 }
-fn parse_assignment<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Result<Statement<'a, 'b>, ParseError<'a>> {
+fn parse_assignment<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<Statement<'a, 'b>, ParseError<'a>> {
     let first = parse_expression(tokens, arena)?;
 
     let (destination, value) = if tokens.peek()? != ";" {
@@ -808,7 +811,7 @@ fn parse_assignment<'a, 'b>(tokens: &mut Tokenizer<'a>, arena: &'b Arena) -> Res
     expect_symbol(tokens, ";")?;
     Ok(Statement::Assignment { destination, value })
 }
-fn expect_symbol<'a>(tokens: &mut Tokenizer<'a>, expected: &'static str) -> Result<(), ParseError<'a>> {
+fn expect_symbol<'a>(tokens: &mut Lexer<'a>, expected: &'static str) -> Result<(), ParseError<'a>> {
     let token = tokens.next()?;
     if token == expected {
         Ok(())
@@ -817,7 +820,7 @@ fn expect_symbol<'a>(tokens: &mut Tokenizer<'a>, expected: &'static str) -> Resu
         Err(ParseError::ExpectedSymbol { expected, found: token.as_str(), line: tokens.get_current_line() })
     }
 }
-fn expect_keyword<'a>(tokens: &mut Tokenizer<'a>, expected: &'static str) -> Result<(), ParseError<'a>> {
+fn expect_keyword<'a>(tokens: &mut Lexer<'a>, expected: &'static str) -> Result<(), ParseError<'a>> {
     let token = tokens.next()?;
     if token == expected {
         Ok(())
@@ -826,7 +829,7 @@ fn expect_keyword<'a>(tokens: &mut Tokenizer<'a>, expected: &'static str) -> Res
         Err(ParseError::ExpectedKeyword { expected, found: token.as_str(), line: tokens.get_current_line() })
     }
 }
-fn next_identifier<'a>(tokens: &mut Tokenizer<'a>, ) -> Result<&'a [u8], ParseError<'a>> {
+fn next_identifier<'a>(tokens: &mut Lexer<'a>, ) -> Result<&'a [u8], ParseError<'a>> {
     let token = tokens.next()?;
 
     if !token.as_bytes()[0].is_ascii_alphabetic() {
