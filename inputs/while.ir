@@ -1,1 +1,27 @@
-IRfunction { paramaters_count: 1, blocks: [Block { instructions: VecArena { buffer: [Immediate { destination: 24, value: 0 }] } }, Block { instructions: VecArena { buffer: [Move { source: 8, destination: 32 }, Immediate { destination: 40, value: 0 }, BinaryOperation { size: 32, operation: Sgreater, destination: 48, left: 32, right: 40 }, Immediate { destination: 56, value: 1 }, BinaryOperation { size: 8, operation: Xor, destination: 56, left: 56, right: 48 }, Branch { condition: 56, label: 3 }] } }, Block { instructions: VecArena { buffer: [Move { source: 24, destination: 64 }, Move { source: 8, destination: 72 }, BinaryOperation { size: 32, operation: Add, destination: 80, left: 64, right: 72 }, Move { source: 80, destination: 24 }, Move { source: 8, destination: 88 }, Immediate { destination: 96, value: 1 }, BinaryOperation { size: 32, operation: Sub, destination: 104, left: 88, right: 96 }, Move { source: 104, destination: 8 }, Jump { label: 1 }] } }, Block { instructions: VecArena { buffer: [Move { source: 24, destination: 112 }, Return { value: Some(112) }] } }], stack_size: 112 }
+IRfunction { paramaters_count: 1, blocks: [
+Block - instructions: [
+    Immediate { destination: 24, value: 0 },
+], 
+Block - instructions: [
+    Move { source: 8, destination: 32 },
+    Immediate { destination: 40, value: 0 },
+    BinaryOperation { size: 32, operation: Sgreater, destination: 48, left: 32, right: 40 },
+    Immediate { destination: 56, value: 1 },
+    BinaryOperation { size: 8, operation: Xor, destination: 56, left: 56, right: 48 },
+    Branch { condition: 56, label: 3 },
+], 
+Block - instructions: [
+    Move { source: 24, destination: 64 },
+    Move { source: 8, destination: 72 },
+    BinaryOperation { size: 32, operation: Add, destination: 80, left: 64, right: 72 },
+    Move { source: 80, destination: 24 },
+    Move { source: 8, destination: 88 },
+    Immediate { destination: 96, value: 1 },
+    BinaryOperation { size: 32, operation: Sub, destination: 104, left: 88, right: 96 },
+    Move { source: 104, destination: 8 },
+    Jump { label: 1 },
+], 
+Block - instructions: [
+    Move { source: 24, destination: 112 },
+    Return { value: Some(112) },
+]], stack_size: 112 }

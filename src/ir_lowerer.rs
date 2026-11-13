@@ -1,3 +1,5 @@
+use std::fmt::{self, Debug, Formatter};
+
 use crate::arena::{Arena, VecArena};
 use crate::parser::{Expression, ASTfunction, Statement, Type, ASTbinaryOperator, ASTunaryOperator};
 
@@ -9,9 +11,18 @@ pub struct IRfunction<'b> {
     pub blocks: &'b [Block<'b>],
     pub stack_size: u32,
 }
-#[derive(Debug)]
 pub struct Block<'b> {
     pub instructions: VecArena<'b, Instruction<'b>>,
+}
+impl<'a> Debug for Block<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("\nBlock - instructions: [\n")?;
+
+        for e in self.instructions.array() {
+            writeln!(f, "    {:?},", e)?;
+        }
+        f.write_str("]")
+    }
 }
 #[derive(Debug)]
 pub enum Instruction<'b> {

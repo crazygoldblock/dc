@@ -1,1 +1,14 @@
-IRfunction { paramaters_count: 2, blocks: [Block { instructions: VecArena { buffer: [Immediate { destination: 32, value: 1 }, Move { source: 16, destination: 40 }, BinaryOperation { size: 32, operation: Add, destination: 48, left: 32, right: 40 }, Move { source: 8, destination: 56 }, BinaryOperation { size: 32, operation: Add, destination: 64, left: 48, right: 56 }, Immediate { destination: 72, value: 4 }, Immediate { destination: 80, value: 6 }, BinaryOperation { size: 32, operation: Mul, destination: 88, left: 72, right: 80 }, BinaryOperation { size: 32, operation: Sub, destination: 96, left: 64, right: 88 }, Move { source: 96, destination: 104 }, Return { value: Some(104) }] } }], stack_size: 104 }
+IRfunction { paramaters_count: 2, blocks: [
+Block - instructions: [
+    Immediate { destination: 32, value: 1 },
+    Move { source: 16, destination: 40 },
+    BinaryOperation { size: 32, operation: Add, destination: 48, left: 32, right: 40 },
+    Move { source: 8, destination: 56 },
+    BinaryOperation { size: 32, operation: Add, destination: 64, left: 48, right: 56 },
+    Immediate { destination: 72, value: 4 },
+    Immediate { destination: 80, value: 6 },
+    BinaryOperation { size: 32, operation: Mul, destination: 88, left: 72, right: 80 },
+    BinaryOperation { size: 32, operation: Sub, destination: 96, left: 64, right: 88 },
+    Move { source: 96, destination: 104 },
+    Return { value: Some(104) },
+]], stack_size: 104 }
