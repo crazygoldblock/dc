@@ -142,20 +142,7 @@ pub enum IRbinaryOperator {
 }
 impl IRbinaryOperator {
     pub fn is_int(&self) -> bool {
-        match self {
-            IRbinaryOperator::Feq => false,
-            IRbinaryOperator::FnotEq => false,
-            IRbinaryOperator::Fgreater => false,
-            IRbinaryOperator::FgreaterEq => false,
-            IRbinaryOperator::Fless => false,
-            IRbinaryOperator::FlessEq => false,
-            IRbinaryOperator::Fadd => false,
-            IRbinaryOperator::Fsub => false,
-            IRbinaryOperator::Fmul => false,
-            IRbinaryOperator::Fdiv => false,
-            IRbinaryOperator::Frem => false,
-            _ => true,
-        }
+        !Self::is_float(&self)
     }
     pub fn is_float(&self) -> bool {
         match self {
@@ -235,6 +222,7 @@ pub enum IRerror<'a> {
         found: u8,
     },
     BreakOutsideLoop,
+    ContinueOutsideLoop,
     DuplicateVariableName{
         name: &'a[u8],
     },
@@ -253,7 +241,10 @@ pub enum IRerror<'a> {
     },
     InvalidType{
         typ: &'a [u8],
-    }
+    },
+    MissignReturn{
+        function_name: &'a [u8],
+    },
 }
 pub fn lower_function<'b>(
     arena: &'b Arena,
@@ -264,9 +255,8 @@ pub fn lower_function<'b>(
     blocks.push(Block { instructions: arena.vec_capacity(16) });
 
     let mut variables = Vec::new();
-
+    let mut breaks = Vec::new();
     let mut stack_size = 0;
-
     let parameters = arena.alloc_array(RegisterType::Bool, function.parameters.len());
 
     for (i, p) in function.parameters.iter().enumerate() {
@@ -283,7 +273,20 @@ pub fn lower_function<'b>(
     else { None };
 
     for s in function.body {
-        lower_statement(s, arena, &mut stack_size, &mut blocks, &mut variables, return_type, None, functions)?;
+        lower_statement(s, arena, &mut stack_size, &mut blocks, &mut variables, return_type, None, functions, &mut breaks)?;
+    }
+
+    if !matches!(function.body.last().expect("body is not empty"), Statement::Return{value:_}) {
+        if function.return_type.is_some() {
+            return Err(IRerror::MissignReturn { function_name: arena.alloc_slice(function.name) });
+        }
+        else {
+            lower_statement(&Statement::Return { value: None }, arena, &mut stack_size, &mut blocks, &mut variables, return_type, None, functions, &mut breaks)?;
+        }
+    }
+
+    if breaks.len() > 0 {
+        return Err(IRerror::BreakOutsideLoop);
     }
 
     return Ok(IRfunction {
@@ -291,127 +294,6 @@ pub fn lower_function<'b>(
         blocks: blocks.array(),
         stack_size,
     });
-}
-#[derive(PartialEq, Clone, Debug, Copy)]
-pub enum RegisterType<'b> {   
-    I8,
-    I16,
-    I32,
-    I64,
-
-    U8,
-    U16,
-    U32,
-    U64,
-
-    F32,
-    F64,
-
-    Bool,
-
-    Ptr(VariableType<'b>),
-}
-#[derive(PartialEq, Clone, Debug, Copy)]
-#[non_exhaustive]
-pub enum VariableType<'b> {
-    Primitive(&'b RegisterType<'b>),
-    #[allow(unused)]
-    Struct, //(Struct<'a, 'b>),
-    //Union, //(Union<'a, 'b>),
-}
-impl<'b> RegisterType<'b> {
-    fn size(&self) -> u8 {
-        match self {
-            RegisterType::I8 => 8,
-            RegisterType::I16 => 16,
-            RegisterType::I32 => 32,
-            RegisterType::I64 => 64,
-            RegisterType::U8 => 8,
-            RegisterType::U16 => 16,
-            RegisterType::U32 => 32,
-            RegisterType::U64 => 64,
-            RegisterType::F32 => 32,
-            RegisterType::F64 => 64,
-            RegisterType::Bool => 8,
-            RegisterType::Ptr(_) => 64,
-        }
-    }
-    fn is_int(&self) -> bool {
-        self.is_signed() || self.is_unsigned()
-    }
-    fn is_signed(&self) -> bool {
-        match self {
-            RegisterType::I8 |
-            RegisterType::I16 |
-            RegisterType::I32 |
-            RegisterType::I64 => true,
-            _=> false,
-        }
-    }
-    fn is_unsigned(&self) -> bool {
-        match self {
-            RegisterType::U8 |
-            RegisterType::U16 |
-            RegisterType::U32 |
-            RegisterType::U64 => true,
-            _=> false,
-        }
-    }
-    fn is_float(&self) -> bool {
-        match self {
-            RegisterType::F32 |
-            RegisterType::F64 => true,
-            _=> false,
-        }
-    }
-    fn from_str(input: &[u8]) -> Option<RegisterType<'b>> {
-        Some(match input {
-            b"i8" => RegisterType::I8,
-            b"i16" => RegisterType::I16,
-            b"i32" => RegisterType::I32,
-            b"i64" => RegisterType::I64,
-            b"u8" => RegisterType::U8,
-            b"u16" => RegisterType::U16,
-            b"u32" => RegisterType::U32,
-            b"u64" => RegisterType::U64,
-            b"f32" => RegisterType::F32,
-            b"f64" => RegisterType::F64,
-            b"bool" => RegisterType::Bool,
-            _ => return None,
-        })
-    }
-    fn is_ptr(&self) -> bool {
-        matches!(self, RegisterType::Ptr(_))
-    }
-    fn ptr_element_size(&self) -> u64 {
-        if let RegisterType::Ptr(ptr) = self {
-            if let VariableType::Primitive(prim) = ptr {
-                return prim.size() as u64;
-            }
-        }
-        panic!("type is not a pointer");
-    }
-    pub fn to_string(&self) -> String {
-        match self {
-            RegisterType::I8 => return "i8".to_string(),
-            RegisterType::I16 => return  "i16".to_string(),
-            RegisterType::I32 => return  "i32".to_string(),
-            RegisterType::I64 => return  "i64".to_string(),
-            RegisterType::U8 => return  "u8".to_string(),
-            RegisterType::U16 => return  "u16".to_string(),
-            RegisterType::U32 => return  "u32".to_string(),
-            RegisterType::U64 => return  "u64".to_string(),
-            RegisterType::F32 => return  "f32".to_string(),
-            RegisterType::F64 => return  "f64".to_string(),
-            RegisterType::Bool => return  "bool".to_string(),
-            RegisterType::Ptr(variable_type) => {
-                match variable_type {
-                    VariableType::Primitive(register_type) => "*".to_string() + &register_type.to_string(),
-                    VariableType::Struct => panic!("no structs"),
-                }
-            },
-        }
-    }
 }
 fn lower_expression<'a, 'b, 'c>(
     expression: &Expression, 
@@ -785,8 +667,6 @@ fn lower_expression<'a, 'b, 'c>(
             };
         },
         Expression::Cast { expr, typ } => {
-            // TODO: pointer casts
-
             let (offset, left_t) = lower_expression(expr, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
 
             let cast_type = type_to_register(typ, arena)?;
@@ -934,6 +814,7 @@ fn lower_statement<'a, 'b, 'c>(
     return_type: Option<RegisterType<'c>>,
     last_loop_start: Option<i32>,
     functions: &[ASTfunction],
+    breaks: &mut Vec<(usize, usize)>,
 ) -> Result<(), IRerror<'c>> {
     match statement {
         Statement::Assignment { destination, value } => {
@@ -1011,7 +892,7 @@ fn lower_statement<'a, 'b, 'c>(
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions)?;
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions, breaks)?;
             }
 
             variables.truncate(var_len);
@@ -1031,7 +912,7 @@ fn lower_statement<'a, 'b, 'c>(
                 let var_len = variables.len();
 
                 for s in *e {
-                    lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions)?;
+                    lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions, breaks)?;
                 }
 
                 while variables.len() > var_len {
@@ -1074,9 +955,10 @@ fn lower_statement<'a, 'b, 'c>(
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
             let var_len = variables.len();
+            let breaks_len = breaks.len();
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions)?;
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions, breaks)?;
             }
 
             while variables.len() > var_len {
@@ -1094,15 +976,26 @@ fn lower_statement<'a, 'b, 'c>(
                 label: next_block_index as i32, 
             });
 
+            for (block_index,instruction_index) in &breaks[breaks_len..] {
+                *blocks.get_mut(*block_index).expect("saved index").instructions.get_mut(*instruction_index).expect("saved index") 
+                    = Instruction::Jump { label: next_block_index as i32 };
+            }
+            breaks.truncate(breaks_len);
+            
             blocks.push(Block { instructions: arena.vec_capacity(16) });
         },
-        Statement::Break => todo!(),
+        Statement::Break => {
+            let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
+
+            instructions.push(Instruction::Jump { label: i32::MIN });
+            breaks.push((blocks.len()-1, blocks.last().expect("not empty").instructions.len()-1));
+        },
         Statement::Continue => {
             if let Some(i) = last_loop_start {
                 blocks.last_mut().expect("blocks have len of atleast 1").instructions.push(Instruction::Jump { label: i });
             }
             else { 
-                return Err(IRerror::BreakOutsideLoop);
+                return Err(IRerror::ContinueOutsideLoop);
             }
         },
         Statement::Declaration { typ, name, value } => {
@@ -1128,9 +1021,10 @@ fn lower_statement<'a, 'b, 'c>(
         },
         Statement::For { declaration, condition, iteration, body } => {
             let var_len = variables.len();
+            let breaks_len = breaks.len();
 
             if let Some(d) = declaration {
-                lower_statement(d, arena, stack_size, blocks, variables, return_type, last_loop_start, functions)?;
+                lower_statement(d, arena, stack_size, blocks, variables, return_type, last_loop_start, functions, breaks)?;
             }
             
             blocks.push(Block { instructions: arena.vec_capacity(16) });
@@ -1162,11 +1056,11 @@ fn lower_statement<'a, 'b, 'c>(
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions)?;
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions, breaks)?;
             }
 
             if let Some(ite) = iteration {
-                lower_statement(ite, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions)?;
+                lower_statement(ite, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions, breaks)?;
             }
 
             while variables.len() > var_len {
@@ -1185,11 +1079,12 @@ fn lower_statement<'a, 'b, 'c>(
                     label: next_block_index as i32, 
                 });
             }
-            else {
-                blocks.get_mut(condition_block_index).expect("saved index").instructions.push(Instruction::Jump {  
-                    label: next_block_index as i32, 
-                });
+
+            for (block_index, instruction_index) in &breaks[breaks_len..] {
+                *blocks.get_mut(*block_index).expect("saved index").instructions.get_mut(*instruction_index).expect("saved index") 
+                    = Instruction::Jump { label: next_block_index as i32 };
             }
+            breaks.truncate(breaks_len);
             
             blocks.push(Block { instructions: arena.vec_capacity(16) });
         },
@@ -1198,9 +1093,10 @@ fn lower_statement<'a, 'b, 'c>(
             let start_block_index = blocks.len()-1;
 
             let var_len = variables.len();
+            let breaks_len = breaks.len();
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(start_block_index as i32), functions)?;
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(start_block_index as i32), functions, breaks)?;
             }
 
             while variables.len() > var_len {
@@ -1221,6 +1117,12 @@ fn lower_statement<'a, 'b, 'c>(
                 label: next_block_index as i32, 
             });
 
+            for (block_index,instruction_index) in &breaks[breaks_len..] {
+                *blocks.get_mut(*block_index).expect("saved index").instructions.get_mut(*instruction_index).expect("saved index") 
+                    = Instruction::Jump { label: next_block_index as i32 };
+            }
+            breaks.truncate(breaks_len);
+
             blocks.push(Block { instructions: arena.vec_capacity(16) });
         },
         Statement::Switch { value: _, arms: _, default: _ } => todo!(),
@@ -1233,5 +1135,125 @@ fn type_to_register<'b>(typ: &Type, arena: &'b Arena) -> Result<RegisterType<'b>
             RegisterType::from_str(arena.alloc_slice(name)).ok_or(IRerror::InvalidType { typ: arena.alloc_slice(name) })
         },
         Type::Pointer(ptr) => Ok(RegisterType::Ptr(VariableType::Primitive(arena.alloc(type_to_register(ptr, arena)?)))),
+    }
+}
+#[derive(PartialEq, Clone, Debug, Copy)]
+pub enum RegisterType<'b> {   
+    I8,
+    I16,
+    I32,
+    I64,
+
+    U8,
+    U16,
+    U32,
+    U64,
+
+    F32,
+    F64,
+
+    Bool,
+
+    Ptr(VariableType<'b>),
+}
+#[derive(PartialEq, Clone, Debug, Copy)]
+pub enum VariableType<'b> {
+    Primitive(&'b RegisterType<'b>),
+    #[allow(unused)]
+    Struct, //(Struct<'a, 'b>),
+    //Union, //(Union<'a, 'b>),
+}
+impl<'b> RegisterType<'b> {
+    fn size(&self) -> u8 {
+        match self {
+            RegisterType::I8 => 8,
+            RegisterType::I16 => 16,
+            RegisterType::I32 => 32,
+            RegisterType::I64 => 64,
+            RegisterType::U8 => 8,
+            RegisterType::U16 => 16,
+            RegisterType::U32 => 32,
+            RegisterType::U64 => 64,
+            RegisterType::F32 => 32,
+            RegisterType::F64 => 64,
+            RegisterType::Bool => 8,
+            RegisterType::Ptr(_) => 64,
+        }
+    }
+    fn is_int(&self) -> bool {
+        self.is_signed() || self.is_unsigned()
+    }
+    fn is_signed(&self) -> bool {
+        match self {
+            RegisterType::I8 |
+            RegisterType::I16 |
+            RegisterType::I32 |
+            RegisterType::I64 => true,
+            _=> false,
+        }
+    }
+    fn is_unsigned(&self) -> bool {
+        match self {
+            RegisterType::U8 |
+            RegisterType::U16 |
+            RegisterType::U32 |
+            RegisterType::U64 => true,
+            _=> false,
+        }
+    }
+    fn is_float(&self) -> bool {
+        match self {
+            RegisterType::F32 |
+            RegisterType::F64 => true,
+            _=> false,
+        }
+    }
+    fn from_str(input: &[u8]) -> Option<RegisterType<'b>> {
+        Some(match input {
+            b"i8" => RegisterType::I8,
+            b"i16" => RegisterType::I16,
+            b"i32" => RegisterType::I32,
+            b"i64" => RegisterType::I64,
+            b"u8" => RegisterType::U8,
+            b"u16" => RegisterType::U16,
+            b"u32" => RegisterType::U32,
+            b"u64" => RegisterType::U64,
+            b"f32" => RegisterType::F32,
+            b"f64" => RegisterType::F64,
+            b"bool" => RegisterType::Bool,
+            _ => return None,
+        })
+    }
+    fn is_ptr(&self) -> bool {
+        matches!(self, RegisterType::Ptr(_))
+    }
+    fn ptr_element_size(&self) -> u64 {
+        if let RegisterType::Ptr(ptr) = self {
+            if let VariableType::Primitive(prim) = ptr {
+                return prim.size() as u64;
+            }
+        }
+        panic!("type is not a pointer");
+    }
+    pub fn to_string(&self) -> String {
+        match self {
+            RegisterType::I8 => return "i8".to_string(),
+            RegisterType::I16 => return  "i16".to_string(),
+            RegisterType::I32 => return  "i32".to_string(),
+            RegisterType::I64 => return  "i64".to_string(),
+            RegisterType::U8 => return  "u8".to_string(),
+            RegisterType::U16 => return  "u16".to_string(),
+            RegisterType::U32 => return  "u32".to_string(),
+            RegisterType::U64 => return  "u64".to_string(),
+            RegisterType::F32 => return  "f32".to_string(),
+            RegisterType::F64 => return  "f64".to_string(),
+            RegisterType::Bool => return  "bool".to_string(),
+            RegisterType::Ptr(variable_type) => {
+                match variable_type {
+                    VariableType::Primitive(register_type) => "*".to_string() + &register_type.to_string(),
+                    VariableType::Struct => panic!("no structs"),
+                }
+            },
+        }
     }
 }

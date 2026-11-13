@@ -171,7 +171,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        str::from_utf8(&self.buffer[start..end]).unwrap()
+        str::from_utf8(&self.buffer[start..end]).unwrap().trim()
     }
     pub fn last(&self) -> &'a str {
         str::from_utf8(self.last).unwrap()

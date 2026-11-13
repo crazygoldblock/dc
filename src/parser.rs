@@ -269,7 +269,10 @@ fn parse_function<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena, public: bool
     let return_type = if tokens.peek()? != "void" {
         Some(parse_type(tokens, &arena)?)
     }
-    else { None };
+    else {
+        tokens.next()?; 
+        None 
+    };
 
     let name = next_identifier(tokens)?;
 
@@ -659,7 +662,10 @@ fn parse_statement<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<S
             let r: &Statement<'_, '_> = arena.alloc(Statement::Declaration { typ: d.1, name: d.0, value: d.2 });
             Some(r)
         }
-        else { None };
+        else {
+            tokens.next()?; 
+            None 
+        };
 
         let condition = if tokens.peek()? != ";" {
             Some(parse_expression(tokens, arena)?)
@@ -673,9 +679,11 @@ fn parse_statement<'a, 'b>(tokens: &mut Lexer<'a>, arena: &'b Arena) -> Result<S
             let r: &Statement<'_, '_> = arena.alloc(a);
             Some(r)
         }
-        else { None };
+        else { 
+            tokens.next()?; 
+            None 
+        };
 
-        expect_symbol(tokens, ";")?;
         expect_symbol(tokens, ")")?;
 
         let body = parse_body(tokens, arena)?;

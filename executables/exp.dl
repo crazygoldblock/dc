@@ -1,0 +1,41 @@
+i32 main(*u8 args) {
+    i32 value = atoi(args);
+    i32 f = exp(2, value);
+
+    *u8 buffer = [0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8];
+    u64 len = itoa(buffer, f) as u64;
+
+    print(buffer + 10u64 - len, len);
+    return 0;
+}
+i32 atoi(*u8 ptr) {
+    while *ptr != 32u8 {
+        ptr += 1u64;
+    }
+    ptr += 1u64;
+
+    i32 result = 0;
+    while *ptr != 0u8 {
+        result *= 10;
+        result += (*ptr - 48u8) as i32;
+        ptr += 1u64;
+    }
+    return result;
+}
+i32 exp(i32 base, i32 power) {
+    if power <= 1 {
+        return base;
+    }
+    return base * exp(base, power-1);
+} 
+i32 itoa(*u8 ptr, i32 value) {
+    i32 len = 0;
+    ptr += 9u64;
+    while value != 0 {
+        *ptr = ((value % 10) + 48) as u8;
+        ptr -= 1u64;
+        value /= 10;
+        len += 1;
+    }
+    return len;
+}

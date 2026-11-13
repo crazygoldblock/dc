@@ -90,7 +90,7 @@ fn parse_error(error: ParseError) -> String {
         ParseError::EndOfFile => unreachable!(),
         ParseError::UnexpectedEndOfFile { line } => format!("Unexpected end of file!\nLine: {line}"),
         ParseError::ExpectedKeyword { expected, found, line } => format!("Expected keyword: {expected}, found: {found}!\nLine: {line}"),
-        ParseError::ExpectedSymbol { expected, found, line } => format!("Expected symbol: {expected}, found: {found}!\nLine: {line}"),
+        ParseError::ExpectedSymbol { expected, found, line } => format!("Expected symbol: \"{expected}\", found: \"{found}\"!\nLine: {line}"),
         ParseError::ExpectedIdentifier { found, line } => format!("Expected idendifier, found: {found}!\nLine:{line}"),
         ParseError::ExpectedOperator { found, line } => format!("Expected operator, found: {found}!\nLine: {line}"),
         ParseError::UnclosedBrackets { line } => format!("Unclosed brackets!\nLine: {line}"),
@@ -176,6 +176,8 @@ fn ir_error(error: IRerror) -> String {
         IRerror::VarNameNotFound { name } => format!("Use of unknown variable! Name: {}", String::from_utf8_lossy(name)),
         IRerror::FunctionNotFound { name } => format!("Use of unknown function! Name: {}", String::from_utf8_lossy(name)),
         IRerror::InvalidType { typ } => format!("Found invalid Type! Type: {}", String::from_utf8_lossy(typ)),
+        IRerror::MissignReturn { function_name } => format!("Missing return statement inside function! Function name: {}", String::from_utf8_lossy(function_name)),
+        IRerror::ContinueOutsideLoop => format!("Continue statement used outside loop!"),
     }
 }
 fn opt_reg_str(reg: Option<RegisterType>) -> String {

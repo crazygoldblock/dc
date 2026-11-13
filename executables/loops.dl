@@ -1,0 +1,26 @@
+i32 main(*u8 args) {    
+    *u8 buffer = [2u8, 3u8, 5u8, 7u8, 11u8, 13u8, 17u8, 19u8, 23u8, 0u8];
+    for (; !is_zero(buffer); buffer += 1u64;) {
+        print_int(*buffer as i32);
+    }
+    return 0;
+}
+bool is_zero(*u8 ptr) {
+    if *ptr == 0u8 {
+        return true;
+    }
+    return false;
+}
+void print_int(i32 value) {
+    *u8 buffer = [0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 10u8];
+    i32 len = 1;
+    buffer += 8u64;
+    while value != 0 {
+        *buffer = ((value % 10) + 48) as u8;
+        buffer -= 1u64;
+        value /= 10;
+        len += 1;
+    }
+    print(buffer + 1u64, len as u64);
+    return;
+}
