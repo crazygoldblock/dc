@@ -1,14 +1,14 @@
 IRfunction { paramaters_count: 2, blocks: [
 Block - instructions: [
-    Immediate { destination: 32, value: 1 },
-    Move { source: 16, destination: 40 },
-    BinaryOperation { size: 32, operation: Add, destination: 48, left: 32, right: 40 },
-    Move { source: 8, destination: 56 },
-    BinaryOperation { size: 32, operation: Add, destination: 64, left: 48, right: 56 },
-    Immediate { destination: 72, value: 4 },
-    Immediate { destination: 80, value: 6 },
-    BinaryOperation { size: 32, operation: Mul, destination: 88, left: 72, right: 80 },
-    BinaryOperation { size: 32, operation: Sub, destination: 96, left: 64, right: 88 },
-    Move { source: 96, destination: 104 },
-    Return { value: Some(104) },
-]], stack_size: 104 }
+    Immediate { destination: 28, value: 1, size: S32 },
+    Move { size: S32, source: 16, destination: 32 },
+    BinaryOperation { size: S32, operation: Add, destination: 36, left: 28, right: 32 },
+    Move { size: S32, source: 8, destination: 40 },
+    BinaryOperation { size: S32, operation: Add, destination: 44, left: 36, right: 40 },
+    Immediate { destination: 48, value: 4, size: S32 },
+    Immediate { destination: 52, value: 6, size: S32 },
+    BinaryOperation { size: S32, operation: Mul, destination: 56, left: 48, right: 52 },
+    BinaryOperation { size: S32, operation: Sub, destination: 60, left: 44, right: 56 },
+    Move { size: S32, source: 60, destination: 64 },
+    Return { value: Some((64, S32)) },
+]], stack_size: 64 }

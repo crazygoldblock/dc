@@ -3,8 +3,6 @@ use std::fmt::{self, Debug, Formatter};
 use crate::arena::{Arena, VecArena};
 use crate::parser::{Expression, ASTfunction, Statement, Type, ASTbinaryOperator, ASTunaryOperator};
 
-// TODO: Check for missing returns and jumps to non existent blocks
-
 #[derive(Debug)]
 pub struct IRfunction<'b> {
     pub paramaters_count: u16,
@@ -29,6 +27,7 @@ pub enum Instruction<'b> {
     Immediate{
         destination: u32,
         value: u64,
+        size: Size,
     },
     ImmediateFloat{
         long: bool,
@@ -36,17 +35,17 @@ pub enum Instruction<'b> {
         value: f64,
     },
     Load{
-        size: u8,
+        size: Size,
         destination: u32,
         address: u32,
     },
     Store{
-        size: u8,
+        size: Size,
         source: u32,
         address: u32,
     },
     BinaryOperation{
-        size: u8,
+        size: Size,
         operation: IRbinaryOperator,
         destination: u32,
         left: u32,
@@ -55,10 +54,11 @@ pub enum Instruction<'b> {
     Call(&'b ( 
         &'b [u8],
         &'b [u32],
-        u32),
+        u32,
+        Size),
     ),
     Return{
-        value: Option<u32>,
+        value: Option<(u32, Size)>,
     },
     Branch{
         condition: u32,
@@ -70,18 +70,19 @@ pub enum Instruction<'b> {
     ExtendTruncate{
         typ: ExtTruncType,
         source: u32,
-        from_size: u8,
+        from_size: Size,
         destination: u32,
-        to_size: u8,
+        to_size: Size,
     },
     Convert{
         typ: ConvertType,
         source: u32,
-        from_size: u8,
+        from_size: Size,
         destination: u32,
-        to_size: u8,
+        to_size: Size,
     },
     Move{
+        size: Size,
         source: u32,
         destination: u32,
     },
@@ -89,6 +90,23 @@ pub enum Instruction<'b> {
         source: u32,
         destination: u32,
     },
+}
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Size {
+    S8,
+    S16,
+    S32,
+    S64,
+}
+impl Size {
+    pub fn to_offset(&self) -> u32 {
+        match self {
+            Size::S8 => 1,
+            Size::S16 => 2,
+            Size::S32 => 4,
+            Size::S64 => 8,
+        }
+    }
 }
 #[derive(Debug)]
 pub enum ConvertType {
@@ -318,25 +336,25 @@ fn lower_expression<'a, 'b, 'c>(
     match expression {
         Expression::Integer{ typ, value } => {
             let typ = type_to_register(&Type::Name(typ.as_bytes()), arena)?;
-            *stack_size += 8;
-            instructions.push(Instruction::Immediate { destination: *stack_size, value: *value });
+            stack_push(stack_size, typ.size());
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: *value, size: typ.size() });
             return Ok(Some((*stack_size, typ)));
         },
         Expression::Float{ long, value} => {
             let typ_r = if *long { RegisterType::F64 } else { RegisterType::F32 };
-            *stack_size += 8;
+            stack_push(stack_size, typ_r.size());
             instructions.push(Instruction::ImmediateFloat { long: *long, destination: *stack_size, value: *value });
             return Ok(Some((*stack_size, typ_r)));
         },
         Expression::Bool(b) => {
-            *stack_size += 8;
-            instructions.push(Instruction::Immediate { destination: *stack_size, value: *b as u64 });
+            stack_push(stack_size, Size::S8);
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: *b as u64, size: Size::S8 });
             return Ok(Some((*stack_size, RegisterType::Bool)));
         },
         Expression::Name(n) => {
             let pos = variables.iter().rev().find(|x| &x.0 == n).ok_or(IRerror::VarNameNotFound { name: arena.alloc_slice(n) })?;
-            *stack_size += 8;
-            instructions.push(Instruction::Move { source: pos.1, destination: *stack_size });
+            stack_push(stack_size, pos.2.size());
+            instructions.push(Instruction::Move { source: pos.1, destination: *stack_size, size: pos.2.size() });
             return Ok(Some((*stack_size, pos.2)));
         },
         Expression::BinaryOperator { operator, left, right } => {
@@ -346,19 +364,19 @@ fn lower_expression<'a, 'b, 'c>(
 
             let op = match operator {
                 ASTbinaryOperator::Add => {
-                    if left_type.is_ptr() && right_type.is_int() &&right_type.size() == 64 {
-                        *stack_size += 8;
-                        instructions.push(Instruction::Immediate { destination: *stack_size, value: left_type.ptr_element_size() / 8 });
+                    if left_type.is_ptr() && right_type.is_int() && right_type.size() == Size::S64 {
+                        stack_push(stack_size, Size::S64);
+                        instructions.push(Instruction::Immediate { destination: *stack_size, value: left_type.ptr_element_size().to_offset() as u64, size: Size::S64 });
                            
                         instructions.push(Instruction::BinaryOperation { 
-                            size: 64, 
+                            size: Size::S64, 
                             operation: IRbinaryOperator::Mul, 
                             destination: *stack_size, 
                             left: *stack_size, 
                             right: right_offset, 
                         });
                         right_offset = *stack_size;
-                        (IRbinaryOperator::Add, left_type, 64)
+                        (IRbinaryOperator::Add, left_type, Size::S64)
                     }
                     else {
                         if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
@@ -373,19 +391,19 @@ fn lower_expression<'a, 'b, 'c>(
                     }
                 },
                 ASTbinaryOperator::Sub => {
-                    if left_type.is_ptr() && right_type.is_int() &&right_type.size() == 64 {
-                        *stack_size += 8;
-                        instructions.push(Instruction::Immediate { destination: *stack_size, value: left_type.ptr_element_size() / 8 });
+                    if left_type.is_ptr() && right_type.is_int() && right_type.size() == Size::S64 {
+                        stack_push(stack_size, Size::S64);
+                        instructions.push(Instruction::Immediate { destination: *stack_size, value: left_type.ptr_element_size().to_offset() as u64, size: Size::S64 });
                            
                         instructions.push(Instruction::BinaryOperation { 
-                            size: 64, 
+                            size: Size::S64, 
                             operation: IRbinaryOperator::Mul, 
                             destination: *stack_size, 
                             left: *stack_size, 
                             right: right_offset, 
                         });
                         right_offset = *stack_size;
-                        (IRbinaryOperator::Sub, left_type, 64)
+                        (IRbinaryOperator::Sub, left_type, Size::S64)
                     }
                     else {
                         if left_type != right_type || left_type == RegisterType::Bool || left_type.is_ptr() {
@@ -565,15 +583,15 @@ fn lower_expression<'a, 'b, 'c>(
                     (op, RegisterType::Bool, left_type.size())
                 },
                 ASTbinaryOperator::Index => {
-                    if !left_type.is_ptr() || !(right_type.is_int() && right_type.size() == 64) {
+                    if !left_type.is_ptr() || !(right_type.is_int() && right_type.size() == Size::S64) {
                         return Err(IRerror::BinaryOperationType { operator: ASTbinaryOperator::Index, left: left_type, right: right_type });
                     }
 
-                    *stack_size += 8;
-                    instructions.push(Instruction::Immediate { destination: *stack_size, value: left_type.ptr_element_size() / 8 });
+                    stack_push(stack_size, Size::S64);
+                    instructions.push(Instruction::Immediate { destination: *stack_size, value: left_type.ptr_element_size().to_offset() as u64, size: Size::S64 });
                            
                     instructions.push(Instruction::BinaryOperation { 
-                        size: 64, 
+                        size: Size::S64, 
                         operation: IRbinaryOperator::Mul, 
                         destination: *stack_size, 
                         left: *stack_size, 
@@ -582,14 +600,14 @@ fn lower_expression<'a, 'b, 'c>(
                     right_offset = *stack_size;
 
                     instructions.push(Instruction::BinaryOperation { 
-                        size: 64, 
+                        size: Size::S64, 
                         operation: IRbinaryOperator::Add, 
                         destination: *stack_size, 
                         left: left_offset, 
                         right: right_offset, 
                     });
 
-                    instructions.push(Instruction::Load { size: left_type.ptr_element_size() as u8, destination: *stack_size, address: *stack_size });
+                    instructions.push(Instruction::Load { size: left_type.ptr_element_size(), destination: *stack_size, address: *stack_size });
 
                     let return_type = if let RegisterType::Ptr(VariableType::Primitive(prim)) = left_type { prim } else { panic!("left type is not a pointer"); };
 
@@ -597,7 +615,7 @@ fn lower_expression<'a, 'b, 'c>(
                 },
             };
 
-            *stack_size += 8;
+            stack_push(stack_size, op.2);
 
             instructions.push(Instruction::BinaryOperation { 
                 size: op.2, 
@@ -617,8 +635,8 @@ fn lower_expression<'a, 'b, 'c>(
                         return Err(IRerror::UnaryOperatorType { operator: ASTunaryOperator::Sub, found: typ });
                     } 
                     let size = typ.size();
-                    *stack_size += 8;
-                    instructions.push(Instruction::Immediate { destination: *stack_size, value: 0 });
+                    stack_push(stack_size, size);
+                    instructions.push(Instruction::Immediate { destination: *stack_size, value: 0, size });
                     instructions.push(Instruction::BinaryOperation { 
                         size: size, 
                         operation: IRbinaryOperator::Sub, 
@@ -633,8 +651,8 @@ fn lower_expression<'a, 'b, 'c>(
                         return Err(IRerror::UnaryOperatorType { operator: ASTunaryOperator::Not, found: typ });
                     } 
                     let size = typ.size();
-                    *stack_size += 8;
-                    instructions.push(Instruction::Immediate { destination: *stack_size, value: 1u64.wrapping_shl(size as u32)-1 });
+                    stack_push(stack_size, size);
+                    instructions.push(Instruction::Immediate { destination: *stack_size, value: 1u64.wrapping_shl(size as u32)-1, size });
                     instructions.push(Instruction::BinaryOperation { 
                         size: size, 
                         operation: IRbinaryOperator::Xor, 
@@ -648,10 +666,10 @@ fn lower_expression<'a, 'b, 'c>(
                     if typ != RegisterType::Bool {
                         return Err(IRerror::UnaryOperatorType { operator: ASTunaryOperator::Invert, found: typ });
                     } 
-                    *stack_size += 8;
-                    instructions.push(Instruction::Immediate { destination: *stack_size, value: 1 });
+                    stack_push(stack_size, typ.size());
+                    instructions.push(Instruction::Immediate { destination: *stack_size, value: 1, size: typ.size() });
                     instructions.push(Instruction::BinaryOperation { 
-                        size: 8, 
+                        size: Size::S8, 
                         operation: IRbinaryOperator::Xor, 
                         destination: *stack_size, 
                         left: offset, 
@@ -661,8 +679,8 @@ fn lower_expression<'a, 'b, 'c>(
                 },
                 ASTunaryOperator::Dereference => {
                     if let RegisterType::Ptr(VariableType::Primitive(prim)) = typ {
-                        *stack_size += 8;
-                        instructions.push(Instruction::Load { size: (typ.ptr_element_size()) as u8, destination: *stack_size, address: offset });
+                        stack_push(stack_size, prim.size());
+                        instructions.push(Instruction::Load { size: typ.ptr_element_size(), destination: *stack_size, address: offset });
                         return Ok(Some((*stack_size, *prim)));
                     }
                     else { 
@@ -671,7 +689,7 @@ fn lower_expression<'a, 'b, 'c>(
                 },
                 ASTunaryOperator::Address => {
                     let typ = RegisterType::Ptr(VariableType::Primitive(arena.alloc(typ)));
-                    *stack_size += 8;
+                    stack_push(stack_size, Size::S64);
                     instructions.push(Instruction::AddrOf { source: offset, destination: *stack_size });
                     return Ok(Some((*stack_size, typ)));
                 },
@@ -683,13 +701,13 @@ fn lower_expression<'a, 'b, 'c>(
             let cast_type = type_to_register(typ, arena)?;
             let cast_size = cast_type.size();
 
-            *stack_size += 8;
+            stack_push(stack_size, cast_size);
 
             if left_t == cast_type {
-                instructions.push(Instruction::Move { source: offset, destination: *stack_size });
+                instructions.push(Instruction::Move { source: offset, destination: *stack_size, size: left_t.size() });
             }
             else if left_t.is_ptr() && cast_type.is_ptr() {
-                instructions.push(Instruction::Move { source: offset, destination: *stack_size });
+                instructions.push(Instruction::Move { source: offset, destination: *stack_size, size: left_t.size() });
             }
             else if left_t.is_float() && cast_type.is_float() {
                 instructions.push(Instruction::ExtendTruncate { 
@@ -702,11 +720,11 @@ fn lower_expression<'a, 'b, 'c>(
             }
             else if left_t.is_int() && cast_type.is_int() {
                 if left_t.size() == cast_type.size() {
-                    instructions.push(Instruction::Move { source: offset, destination: *stack_size });
+                    instructions.push(Instruction::Move { source: offset, destination: *stack_size, size: left_t.size() });
                 }
                 else {
                     instructions.push(Instruction::ExtendTruncate { 
-                        typ: if left_t.size() > cast_size { ExtTruncType::Truncate } else { 
+                        typ: if left_t.size() as u8 > cast_size as u8 { ExtTruncType::Truncate } else { 
                             if left_t.is_signed() { ExtTruncType::SignExtend } else { ExtTruncType::ZeroExtend } }, 
                         source: offset, 
                         from_size: left_t.size(), 
@@ -717,7 +735,7 @@ fn lower_expression<'a, 'b, 'c>(
             }
             else if left_t.is_float() && cast_type == RegisterType::Bool {
                 instructions.push(Instruction::ImmediateFloat { 
-                    long: if left_t.size() == 32 { false } else { true }, 
+                    long: if left_t.size() == Size::S32 { false } else { true }, 
                     destination: *stack_size, 
                     value: 0.0 
                 });
@@ -768,35 +786,36 @@ fn lower_expression<'a, 'b, 'c>(
                     return Err(IRerror::ParameterType { expected: this_type, found: expression_type });
                 }  
             }
-
-            *stack_size += 8;
+            
+            stack_push(stack_size, Size::S64); // TODO: should this be 64?
             instructions.push(Instruction::Call ( 
                 arena.alloc((arena.alloc_slice(name) as &[u8], 
                 register_paratemers as &[u32],  
                 *stack_size,
+                Size::S64,
             ))));
             return match function.return_type.clone() {
                 Some(ret_type) => Ok(Some((*stack_size, type_to_register(&ret_type, arena)?))),
-                None =>  Ok(None),
+                None => Ok(None),
             };
         },
         Expression::Field { expr: _, field: _ } => todo!(),
         Expression::ArrayInit(expressions) => {
             let (exp_offset, array_type) = lower_expression(&expressions[0], arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
             
-            *stack_size += array_type.size() as u32 / 8 * expressions.len() as u32;
-            *stack_size = stack_size.next_multiple_of(8);
+            stack_push_array(stack_size, array_type.size(), expressions.len() as u32);
             let array_start_offset = *stack_size;
 
-            *stack_size += 8;
+            stack_push(stack_size, Size::S64);
+            
             instructions.push(Instruction::AddrOf { source: array_start_offset, destination: *stack_size });
             let array_ptr_offset = *stack_size;
 
-            *stack_size += 8;
-            instructions.push(Instruction::Immediate { destination: *stack_size, value: array_type.size() as u64 /8 });
+            stack_push(stack_size, Size::S64);
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: array_type.size().to_offset() as u64, size: Size::S64 });
             let element_size_offset = *stack_size;
 
-            instructions.push(Instruction::Store { size: array_type.size() as u8, source: exp_offset, address: array_ptr_offset });
+            instructions.push(Instruction::Store { size: array_type.size(), source: exp_offset, address: array_ptr_offset });
             
             for e in expressions[1..].iter() {
                 let (exp_offset, exp_type) = lower_expression(e, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
@@ -805,8 +824,8 @@ fn lower_expression<'a, 'b, 'c>(
                     return Err(IRerror::ArrayElementType { expected: array_type, found: exp_type });
                 }
                 
-                instructions.push(Instruction::BinaryOperation { size: 64, operation: IRbinaryOperator::Add, destination: array_ptr_offset, left: array_ptr_offset, right: element_size_offset });
-                instructions.push(Instruction::Store { size: array_type.size() as u8, source: exp_offset, address: array_ptr_offset });
+                instructions.push(Instruction::BinaryOperation { size: Size::S64, operation: IRbinaryOperator::Add, destination: array_ptr_offset, left: array_ptr_offset, right: element_size_offset });
+                instructions.push(Instruction::Store { size: array_type.size(), source: exp_offset, address: array_ptr_offset });
             }
             instructions.push(Instruction::AddrOf { source: array_start_offset, destination: array_ptr_offset });
 
@@ -832,7 +851,6 @@ fn lower_statement<'a, 'b, 'c>(
             let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
             let value = lower_expression(value, arena, stack_size, instructions, variables, functions)?;
             
-
             if let Some(d) = destination {
                 let value = value.ok_or(IRerror::EmptyType)?;
                 if let Expression::Name(n) = d {
@@ -843,7 +861,7 @@ fn lower_statement<'a, 'b, 'c>(
                         return Err(IRerror::AssignmentType { expr: value.1, destination: *dest_type });
                     }
 
-                    instructions.push(Instruction::Move { source: value.0, destination: *dest_offset });
+                    instructions.push(Instruction::Move { source: value.0, destination: *dest_offset, size: value.1.size() });
                 }
                 else if let Expression::UnaryOperator { operator, expr } = d {
                     if *operator != ASTunaryOperator::Dereference {
@@ -875,7 +893,7 @@ fn lower_statement<'a, 'b, 'c>(
             if value.map(|x| x.1) != return_type {
                 return Err(IRerror::ReturnType { expected: return_type, found: value.map(|x| x.1) });
             }
-            instructions.push(Instruction::Return { value: value.map(|x| x.0) });
+            instructions.push(Instruction::Return { value: value.map(|x| (x.0, x.1.size())) });
         },
         Statement::If { condition, body, else_body } => {
             let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
@@ -885,11 +903,11 @@ fn lower_statement<'a, 'b, 'c>(
                 return Err(IRerror::ConditionType { found: c_type });
             }
 
-            *stack_size += 8;
+            stack_push(stack_size, Size::S8);
 
-            instructions.push(Instruction::Immediate { destination: *stack_size, value: 1 });
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: 1, size: Size::S8 });
             instructions.push(Instruction::BinaryOperation { 
-                size: 8, 
+                size: Size::S8, 
                 operation: IRbinaryOperator::Xor, 
                 destination: *stack_size, 
                 left: *stack_size, 
@@ -950,11 +968,11 @@ fn lower_statement<'a, 'b, 'c>(
                 return Err(IRerror::ConditionType { found: c_type });
             }
 
-            *stack_size += 8;
+            stack_push(stack_size, Size::S8);
 
-            instructions.push(Instruction::Immediate { destination: *stack_size, value: 1 });
+            instructions.push(Instruction::Immediate { destination: *stack_size, value: 1, size: Size::S8 });
             instructions.push(Instruction::BinaryOperation { 
-                size: 8, 
+                size: Size::S8, 
                 operation: IRbinaryOperator::Xor, 
                 destination: *stack_size, 
                 left: *stack_size, 
@@ -1026,7 +1044,7 @@ fn lower_statement<'a, 'b, 'c>(
                 variables.push((name, value_offset, reg_t));
             }
             else {
-                *stack_size += 8;
+                stack_push(stack_size, reg_t.size());
                 variables.push((name, *stack_size, reg_t));
             }
         },
@@ -1049,11 +1067,11 @@ fn lower_statement<'a, 'b, 'c>(
                     return Err(IRerror::ConditionType { found: c_type });
                 }
 
-                *stack_size += 8;
+                stack_push(stack_size, Size::S8);
 
-                instructions.push(Instruction::Immediate { destination: *stack_size, value: 1 });
+                instructions.push(Instruction::Immediate { destination: *stack_size, value: 1, size: Size::S8 });
                 instructions.push(Instruction::BinaryOperation { 
-                    size: 8, 
+                    size: Size::S8, 
                     operation: IRbinaryOperator::Xor, 
                     destination: *stack_size, 
                     left: *stack_size, 
@@ -1175,20 +1193,20 @@ pub enum VariableType<'b> {
     //Union, //(Union<'a, 'b>),
 }
 impl<'b> RegisterType<'b> {
-    fn size(&self) -> u8 {
+    fn size(&self) -> Size {
         match self {
-            RegisterType::I8 => 8,
-            RegisterType::I16 => 16,
-            RegisterType::I32 => 32,
-            RegisterType::I64 => 64,
-            RegisterType::U8 => 8,
-            RegisterType::U16 => 16,
-            RegisterType::U32 => 32,
-            RegisterType::U64 => 64,
-            RegisterType::F32 => 32,
-            RegisterType::F64 => 64,
-            RegisterType::Bool => 8,
-            RegisterType::Ptr(_) => 64,
+            RegisterType::I8 => Size::S8,
+            RegisterType::I16 => Size::S16,
+            RegisterType::I32 => Size::S32,
+            RegisterType::I64 => Size::S64,
+            RegisterType::U8 => Size::S8,
+            RegisterType::U16 => Size::S16,
+            RegisterType::U32 => Size::S32,
+            RegisterType::U64 => Size::S64,
+            RegisterType::F32 => Size::S32,
+            RegisterType::F64 => Size::S64,
+            RegisterType::Bool => Size::S8,
+            RegisterType::Ptr(_) => Size::S64,
         }
     }
     fn is_int(&self) -> bool {
@@ -1238,10 +1256,10 @@ impl<'b> RegisterType<'b> {
     fn is_ptr(&self) -> bool {
         matches!(self, RegisterType::Ptr(_))
     }
-    fn ptr_element_size(&self) -> u64 {
+    fn ptr_element_size(&self) -> Size {
         if let RegisterType::Ptr(ptr) = self {
             if let VariableType::Primitive(prim) = ptr {
-                return prim.size() as u64;
+                return prim.size();
             }
         }
         panic!("type is not a pointer");
@@ -1267,4 +1285,12 @@ impl<'b> RegisterType<'b> {
             },
         }
     }
+}
+fn stack_push(stack_size: &mut u32, size: Size) {
+    *stack_size += size.to_offset();
+    *stack_size = stack_size.next_multiple_of(size.to_offset());
+}
+fn stack_push_array(stack_size: &mut u32, size: Size, len: u32) {
+    *stack_size += size.to_offset() * len;
+    *stack_size = stack_size.next_multiple_of(size.to_offset());
 }
