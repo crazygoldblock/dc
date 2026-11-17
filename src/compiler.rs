@@ -18,12 +18,12 @@ pub fn compile(input_path: &str) -> Result<Vec<u8>, String> {
     let mut functions: Vec<ASTfunction<'_, '_>> = Vec::new();
 
     let pars: &'static [(Type<'static, 'static>, &'static [u8])] = &[ (Type::Pointer(&Type::Name(b"u8")), b""), (Type::Name(b"u64"), b"") ];
-    functions.push(ASTfunction { public: true, return_type: None, name: b"print", parameters: pars, body: &[] });
+    functions.push(ASTfunction { public: true, path: b"", return_type: None, name: b"print", parameters: pars, body: &[] });
 
     let pars: &'static [(Type<'static, 'static>, &'static [u8])] = &[ (Type::Name(b"i32"), b"") ];
-    functions.push(ASTfunction { public: true, return_type: None, name: b"exit", parameters: pars, body: &[] });
+    functions.push(ASTfunction { public: true, path: b"", return_type: None, name: b"exit", parameters: pars, body: &[] });
 
-    let mut fr = parse_file(&mut t, &arena);
+    let mut fr = parse_file(&mut t, &arena, input_path);
     while let Ok(f) = fr {
         match f {
             Fragment::ASTfunction(astfunction) => {
@@ -49,7 +49,7 @@ pub fn compile(input_path: &str) -> Result<Vec<u8>, String> {
             Fragment::Union(_) => todo!(),
             Fragment::GlobalVariable(_) => todo!(),
         }
-        fr = parse_file(&mut t, &arena);
+        fr = parse_file(&mut t, &arena, input_path);
     }
     if !matches!(fr, Err(ParseError::EndOfFile)) {
         return Err(parse_error(fr.unwrap_err()));
@@ -68,7 +68,7 @@ pub fn compile(input_path: &str) -> Result<Vec<u8>, String> {
 
     for func in functions[2..].iter() {
         function_starts.push((func.name, instructions.len()));
-        let ir = match ir_lowerer::lower_function(&arena, func, &functions) {
+        let ir = match ir_lowerer::lower_function(&arena, func, &functions, &[]) {
             Ok(ir) => ir,
             Err(e) => return Err(ir_error(e)),
         };

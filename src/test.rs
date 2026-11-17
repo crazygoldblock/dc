@@ -25,16 +25,16 @@ fn check_ast_and_ir() {
 
                     let mut function_calls = Vec::new();
 
-                    let mut frag = parse_file(&mut tokenizer, &arena);
+                    let mut frag = parse_file(&mut tokenizer, &arena, path.to_str().unwrap());
                     while let Ok(fr) = frag {
                         ast += &format!("{:?}", fr);
 
                         if let Fragment::ASTfunction(func) = fr {
-                            let cf = lower_function(&arena, &func, &[]).unwrap();
+                            let cf = lower_function(&arena, &func, &[], &[]).unwrap();
                             ir += &format!("{:?}", cf);
                             assembly_lowerer::lower_function(&cf, &mut instructions, &arena, &arena, &mut function_calls);
                         }
-                        frag = parse_file(&mut tokenizer, &arena);
+                        frag = parse_file(&mut tokenizer, &arena, path.to_str().unwrap());
                     }
                     if !matches!(frag, Err(ParseError::EndOfFile)) {
                         frag.unwrap();

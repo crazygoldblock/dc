@@ -1,7 +1,7 @@
 use std::fmt::{self, Debug, Formatter};
 
 use crate::arena::{Arena, VecArena};
-use crate::parser::{Expression, ASTfunction, Statement, Type, ASTbinaryOperator, ASTunaryOperator};
+use crate::parser::{ASTbinaryOperator, ASTfunction, ASTunaryOperator, Expression, Statement, Struct, Type};
 
 #[derive(Debug)]
 pub struct IRfunction<'b> {
@@ -279,6 +279,7 @@ pub fn lower_function<'b>(
     arena: &'b Arena,
     function: &ASTfunction,
     functions: &[ASTfunction],
+    structs: &[Struct],
 ) -> Result<IRfunction<'b>, IRerror<'b>> {
     let mut blocks = arena.vec_capacity(8);
     blocks.push(Block { instructions: arena.vec_capacity(16) });
@@ -302,7 +303,7 @@ pub fn lower_function<'b>(
     else { None };
 
     for s in function.body {
-        lower_statement(s, arena, &mut stack_size, &mut blocks, &mut variables, return_type, None, functions, &mut breaks)?;
+        lower_statement(s, arena, &mut stack_size, &mut blocks, &mut variables, return_type, None, functions, &mut breaks, structs)?;
     }
 
     if !matches!(function.body.last().expect("body is not empty"), Statement::Return{value:_}) {
@@ -310,7 +311,7 @@ pub fn lower_function<'b>(
             return Err(IRerror::MissignReturn { function_name: arena.alloc_slice(function.name) });
         }
         else {
-            lower_statement(&Statement::Return { value: None }, arena, &mut stack_size, &mut blocks, &mut variables, return_type, None, functions, &mut breaks)?;
+            lower_statement(&Statement::Return { value: None }, arena, &mut stack_size, &mut blocks, &mut variables, return_type, None, functions, &mut breaks, structs)?;
         }
     }
 
@@ -331,6 +332,7 @@ fn lower_expression<'a, 'b, 'c>(
     instructions: &mut VecArena<'c, Instruction<'c>>,
     variables: &mut Vec<(&'a [u8], u32, RegisterType<'c>)>,
     functions: &[ASTfunction],
+    structs: &[Struct],
 ) -> Result<Option<(u32, RegisterType<'c>)>, IRerror<'c>> {
 
     match expression {
@@ -358,9 +360,9 @@ fn lower_expression<'a, 'b, 'c>(
             return Ok(Some((*stack_size, pos.2)));
         },
         Expression::BinaryOperator { operator, left, right } => {
-            let (left_offset, left_type) = lower_expression(left, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+            let (left_offset, left_type) = lower_expression(left, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
 
-            let (mut right_offset, right_type) = lower_expression(right, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+            let (mut right_offset, right_type) = lower_expression(right, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
 
             let op = match operator {
                 ASTbinaryOperator::Add => {
@@ -627,7 +629,7 @@ fn lower_expression<'a, 'b, 'c>(
             return Ok(Some((*stack_size, op.1)));
         },
         Expression::UnaryOperator { operator, expr } => {
-            let (offset, typ) = lower_expression(expr, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+            let (offset, typ) = lower_expression(expr, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
 
             match operator {
                 ASTunaryOperator::Sub => {
@@ -696,7 +698,7 @@ fn lower_expression<'a, 'b, 'c>(
             };
         },
         Expression::Cast { expr, typ } => {
-            let (offset, left_t) = lower_expression(expr, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+            let (offset, left_t) = lower_expression(expr, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
 
             let cast_type = type_to_register(typ, arena)?;
             let cast_size = cast_type.size();
@@ -778,7 +780,7 @@ fn lower_expression<'a, 'b, 'c>(
             }
 
             for (i, par) in parameters.iter().enumerate() {
-                let (offset, expression_type) = lower_expression(par, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+                let (offset, expression_type) = lower_expression(par, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
                 register_paratemers[i] = offset;
             
                 let this_type = type_to_register(&function.parameters[i].0, arena)?;
@@ -799,9 +801,31 @@ fn lower_expression<'a, 'b, 'c>(
                 None => Ok(None),
             };
         },
-        Expression::Field { expr: _, field: _ } => todo!(),
+        Expression::Field { expr, field } => {
+            let (value_offset, value_type) = 
+                lower_expression(expr, arena, stack_size, instructions, variables, functions, structs)?
+                .ok_or(IRerror::EmptyType)?;
+
+            if let RegisterType::Ptr(VariableType::Struct(name)) = value_type {
+                let st = structs.iter().find(|x| x.name == name).unwrap();
+                
+                let mut offset = 0u32;
+                for f in st.fields {
+                    let reg_type = type_to_register(&f.0, arena)?;
+                    offset = offset.next_multiple_of(reg_type.size().to_offset());
+                    if f.1 == *field {
+                        stack_push(stack_size, Size::S64);
+                        instructions.push(Instruction::Immediate { destination: *stack_size, value: offset as u64, size: Size::S64 });
+                        instructions.push(Instruction::BinaryOperation { size: Size::S64, operation: IRbinaryOperator::Add, destination: *stack_size, left: value_offset, right: *stack_size });
+                        return Ok(Some((*stack_size, reg_type)));
+                    }
+                    offset += reg_type.size().to_offset();
+                }
+            }
+            panic!();
+        },
         Expression::ArrayInit(expressions) => {
-            let (exp_offset, array_type) = lower_expression(&expressions[0], arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+            let (exp_offset, array_type) = lower_expression(&expressions[0], arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
             
             stack_push_array(stack_size, array_type.size(), expressions.len() as u32);
             let array_start_offset = *stack_size;
@@ -818,7 +842,7 @@ fn lower_expression<'a, 'b, 'c>(
             instructions.push(Instruction::Store { size: array_type.size(), source: exp_offset, address: array_ptr_offset });
             
             for e in expressions[1..].iter() {
-                let (exp_offset, exp_type) = lower_expression(e, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+                let (exp_offset, exp_type) = lower_expression(e, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
 
                 if exp_type != array_type {
                     return Err(IRerror::ArrayElementType { expected: array_type, found: exp_type });
@@ -832,8 +856,52 @@ fn lower_expression<'a, 'b, 'c>(
             let ret_type = RegisterType::Ptr(VariableType::Primitive(arena.alloc(array_type)));
             return Ok(Some((array_ptr_offset, ret_type)));
         },
-        Expression::StructInit(_) => todo!(),
+        Expression::StructInit { name, fields } => {
+            let strct = structs.iter().find(|x| x.name == *name).unwrap();
+
+            let (size, align) = struct_size_align(arena, strct).unwrap();
+
+            *stack_size = stack_size.next_multiple_of(align as u32);
+            *stack_size += size;
+            let mut struct_stack_start = *stack_size;
+
+            for field_definition in strct.fields {
+
+                let (_, field_value) = fields.iter().find(|x| x.0 == field_definition.1).unwrap();
+
+                let (value_offset, value_type) = 
+                    lower_expression(field_value, arena, stack_size, instructions, variables, functions, structs)?
+                    .ok_or(IRerror::EmptyType)?;
+
+                let definition_reg = type_to_register(&field_definition.0, arena)?;
+
+                if definition_reg != value_type {
+                    panic!();
+                }
+                struct_stack_start = struct_stack_start.next_multiple_of(definition_reg.size().to_offset());
+                let field_offset = struct_stack_start;
+
+                instructions.push(Instruction::Move { size: value_type.size(), source: value_offset, destination: field_offset });
+                struct_stack_start += definition_reg.size().to_offset();
+            }
+            stack_push(stack_size, Size::S64);
+            instructions.push(Instruction::AddrOf { source: *stack_size - 8, destination: *stack_size });
+            return Ok(Some((*stack_size, RegisterType::Ptr(VariableType::Struct(arena.alloc_slice(strct.name))))));
+        },
     }
+}
+fn struct_size_align<'c>(arena: &'c Arena, s: &Struct) -> Result<(u32, usize), IRerror<'c>> {
+    let mut size = 0u32;
+    let mut align = 0usize;
+
+    for f in s.fields {
+        let reg_type = type_to_register(&f.0, arena)?;
+        let curr_size = reg_type.size().to_offset();
+
+        size = size.next_multiple_of(curr_size);
+        align = align.max(curr_size as usize);
+    }
+    return Ok((size.next_multiple_of(align as u32), align));
 }
 fn lower_statement<'a, 'b, 'c>(
     statement: &Statement<'a, 'b>,
@@ -845,11 +913,12 @@ fn lower_statement<'a, 'b, 'c>(
     last_loop_start: Option<i32>,
     functions: &[ASTfunction],
     breaks: &mut Vec<(usize, usize)>,
+    structs: &[Struct],
 ) -> Result<(), IRerror<'c>> {
     match statement {
         Statement::Assignment { destination, value } => {
             let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
-            let value = lower_expression(value, arena, stack_size, instructions, variables, functions)?;
+            let value = lower_expression(value, arena, stack_size, instructions, variables, functions, structs)?;
             
             if let Some(d) = destination {
                 let value = value.ok_or(IRerror::EmptyType)?;
@@ -887,7 +956,7 @@ fn lower_statement<'a, 'b, 'c>(
         Statement::Return { value } => {
             let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
             let value = match value {
-                Some(v) => lower_expression(v, arena, stack_size, instructions, variables, functions)?,
+                Some(v) => lower_expression(v, arena, stack_size, instructions, variables, functions, structs)?,
                 None => None,
             };
             if value.map(|x| x.1) != return_type {
@@ -897,7 +966,7 @@ fn lower_statement<'a, 'b, 'c>(
         },
         Statement::If { condition, body, else_body } => {
             let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
-            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
 
             if c_type != RegisterType::Bool {
                 return Err(IRerror::ConditionType { found: c_type });
@@ -921,7 +990,7 @@ fn lower_statement<'a, 'b, 'c>(
             let var_len = variables.len();
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions, breaks)?;
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions, breaks, structs)?;
             }
 
             variables.truncate(var_len);
@@ -941,7 +1010,7 @@ fn lower_statement<'a, 'b, 'c>(
                 let var_len = variables.len();
 
                 for s in *e {
-                    lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions, breaks)?;
+                    lower_statement(s, arena, stack_size, blocks, variables, return_type, last_loop_start, functions, breaks, structs)?;
                 }
 
                 while variables.len() > var_len {
@@ -962,7 +1031,7 @@ fn lower_statement<'a, 'b, 'c>(
             let condition_block_index = blocks.len()-1;
 
             let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
-            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
 
             if c_type != RegisterType::Bool {
                 return Err(IRerror::ConditionType { found: c_type });
@@ -987,7 +1056,7 @@ fn lower_statement<'a, 'b, 'c>(
             let breaks_len = breaks.len();
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions, breaks)?;
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions, breaks, structs)?;
             }
 
             while variables.len() > var_len {
@@ -1036,7 +1105,7 @@ fn lower_statement<'a, 'b, 'c>(
             }
 
             if let Some(v) = value {
-                let (value_offset, value_type) = lower_expression(v, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+                let (value_offset, value_type) = lower_expression(v, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
                 
                 if value_type != reg_t {
                     return Err(IRerror::DeclarationDestinationType { expected: reg_t, found: value_type });
@@ -1053,7 +1122,7 @@ fn lower_statement<'a, 'b, 'c>(
             let breaks_len = breaks.len();
 
             if let Some(d) = declaration {
-                lower_statement(d, arena, stack_size, blocks, variables, return_type, last_loop_start, functions, breaks)?;
+                lower_statement(d, arena, stack_size, blocks, variables, return_type, last_loop_start, functions, breaks, structs)?;
             }
             
             blocks.push(Block { instructions: arena.vec_capacity(16) });
@@ -1061,7 +1130,7 @@ fn lower_statement<'a, 'b, 'c>(
 
             let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
             let condition_reg = if let Some(cond) = condition {
-                let (c_offset, c_type) = lower_expression(cond, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+                let (c_offset, c_type) = lower_expression(cond, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
 
                 if c_type != RegisterType::Bool {
                     return Err(IRerror::ConditionType { found: c_type });
@@ -1085,11 +1154,11 @@ fn lower_statement<'a, 'b, 'c>(
             blocks.push(Block { instructions: arena.vec_capacity(16) });
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions, breaks)?;
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions, breaks, structs)?;
             }
 
             if let Some(ite) = iteration {
-                lower_statement(ite, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions, breaks)?;
+                lower_statement(ite, arena, stack_size, blocks, variables, return_type, Some(condition_block_index as i32), functions, breaks, structs)?;
             }
 
             while variables.len() > var_len {
@@ -1125,7 +1194,7 @@ fn lower_statement<'a, 'b, 'c>(
             let breaks_len = breaks.len();
 
             for s in *body {
-                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(start_block_index as i32), functions, breaks)?;
+                lower_statement(s, arena, stack_size, blocks, variables, return_type, Some(start_block_index as i32), functions, breaks, structs)?;
             }
 
             while variables.len() > var_len {
@@ -1133,7 +1202,7 @@ fn lower_statement<'a, 'b, 'c>(
             }
 
             let instructions = &mut blocks.last_mut().expect("blocks have len of atleast 1").instructions;
-            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions)?.ok_or(IRerror::EmptyType)?;
+            let (c_offset, c_type) = lower_expression(condition, arena, stack_size, instructions, variables, functions, structs)?.ok_or(IRerror::EmptyType)?;
 
             if c_type != RegisterType::Bool {
                 return Err(IRerror::ConditionType { found: c_type });
@@ -1188,8 +1257,7 @@ pub enum RegisterType<'b> {
 #[derive(PartialEq, Clone, Debug, Copy)]
 pub enum VariableType<'b> {
     Primitive(&'b RegisterType<'b>),
-    #[allow(unused)]
-    Struct, //(Struct<'a, 'b>),
+    Struct(&'b [u8]),
     //Union, //(Union<'a, 'b>),
 }
 impl<'b> RegisterType<'b> {
@@ -1280,7 +1348,7 @@ impl<'b> RegisterType<'b> {
             RegisterType::Ptr(variable_type) => {
                 match variable_type {
                     VariableType::Primitive(register_type) => "*".to_string() + &register_type.to_string(),
-                    VariableType::Struct => panic!("no structs"),
+                    VariableType::Struct(name) => format!("Struct: {}", String::from_utf8_lossy(name)),
                 }
             },
         }
