@@ -903,12 +903,12 @@ fn struct_size_align<'c>(arena: &'c Arena, s: &Struct) -> Result<(u32, usize), I
     }
     return Ok((size.next_multiple_of(align as u32), align));
 }
-fn lower_statement<'a, 'b, 'c>(
-    statement: &Statement<'a, 'b>,
+fn lower_statement<'b, 'c>(
+    statement: &Statement<'b>,
     arena: &'c Arena,
     stack_size: &mut u32, 
     blocks: &mut VecArena<'c, Block<'c>>,
-    variables: &mut Vec<(&'a [u8], u32, RegisterType<'c>)>,
+    variables: &mut Vec<(&'b [u8], u32, RegisterType<'c>)>,
     return_type: Option<RegisterType<'c>>,
     last_loop_start: Option<i32>,
     functions: &[ASTfunction],

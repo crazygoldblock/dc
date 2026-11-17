@@ -4,6 +4,7 @@ use std::fmt::{Debug, Formatter, Result};
 use std::mem::{MaybeUninit, needs_drop, transmute};
 use std::ptr::{copy_nonoverlapping, read};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
+use std::str;
 
 pub struct Arena {
     buffer: *mut u8,
@@ -48,6 +49,13 @@ impl Arena {
             let ptr = self.alloc_raw(size_of::<T>() * slice.len(), align_of::<T>()) as *mut T;
             copy_nonoverlapping(slice.as_ptr(), ptr, slice.len());
             from_raw_parts_mut(ptr, slice.len())
+        }
+    }
+    pub fn alloc_str<'a>(&'a self, str: &str) -> &'a str {
+        unsafe {
+            let ptr = self.alloc_raw(str.len(), 1);
+            copy_nonoverlapping(str.as_ptr(), ptr, str.len());
+            str::from_utf8_unchecked(from_raw_parts(ptr, str.len()))
         }
     }
     pub fn clear(&mut self) { 

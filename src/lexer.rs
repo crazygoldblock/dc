@@ -22,9 +22,7 @@ impl<'a> PartialEq<&str> for Token<'a> {
     }
 }
 #[derive(Debug)]
-pub enum TokenError<'a> {
-    EndOfFile(&'a str),
-}
+pub struct TokenError;
 pub struct Checkpoint<'a> {
     state: State,
     index: usize,
@@ -41,14 +39,14 @@ impl<'a> Lexer<'a> {
     pub fn new<'b>(input: &'b [u8]) -> Lexer<'b> {
         Lexer { buffer: input, state: State::Start, index: 0, last: &[] }
     }
-    pub fn peek(&mut self) -> Result<Token<'a>, TokenError<'a>> {
+    pub fn peek(&mut self) -> Result<Token<'a>, TokenError> {
         let cp = self.checkpoint();
         let token = self.next();
         self.restore(cp);
 
         return token;
     }
-    pub fn next(&mut self) -> Result<Token<'a>, TokenError<'a>> {
+    pub fn next(&mut self) -> Result<Token<'a>, TokenError> {
         loop {
             if self.index == self.buffer.len() {
                 break;
@@ -133,7 +131,7 @@ impl<'a> Lexer<'a> {
         }
 
         match self.state {
-            State::Start | State::BlockComment{ depth: _ } | State::LineComment => return Err(TokenError::EndOfFile(self.get_current_line())),
+            State::Start | State::BlockComment{ depth: _ } | State::LineComment => return Err(TokenError),
             State::Name { start } => {
                 self.state = State::Start;
                 self.last = &self.buffer[start..self.index];

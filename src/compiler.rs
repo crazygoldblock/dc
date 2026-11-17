@@ -15,12 +15,12 @@ pub fn compile(input_path: &str) -> Result<Vec<u8>, String> {
 
     let arena = Arena::new();
 
-    let mut functions: Vec<ASTfunction<'_, '_>> = Vec::new();
+    let mut functions: Vec<ASTfunction<'_>> = Vec::new();
 
-    let pars: &'static [(Type<'static, 'static>, &'static [u8])] = &[ (Type::Pointer(&Type::Name(b"u8")), b""), (Type::Name(b"u64"), b"") ];
+    let pars: &'static [(Type<'static>, &'static [u8])] = &[ (Type::Pointer(&Type::Name(b"u8")), b""), (Type::Name(b"u64"), b"") ];
     functions.push(ASTfunction { public: true, path: b"", return_type: None, name: b"print", parameters: pars, body: &[] });
 
-    let pars: &'static [(Type<'static, 'static>, &'static [u8])] = &[ (Type::Name(b"i32"), b"") ];
+    let pars: &'static [(Type<'static>, &'static [u8])] = &[ (Type::Name(b"i32"), b"") ];
     functions.push(ASTfunction { public: true, path: b"", return_type: None, name: b"exit", parameters: pars, body: &[] });
 
     let mut fr = parse_file(&mut t, &arena, input_path);
