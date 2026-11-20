@@ -921,16 +921,16 @@ fn lower_statement<'b, 'c>(
             let value = lower_expression(value, arena, stack_size, instructions, variables, functions, structs)?;
             
             if let Some(d) = destination {
-                let value = value.ok_or(IRerror::EmptyType)?;
+                let (value_offset, value_type) = value.ok_or(IRerror::EmptyType)?;
                 if let Expression::Name(n) = d {
                     let (_, dest_offset, dest_type) = variables.iter().find(|x| &x.0 == n)
                         .ok_or(IRerror::VarNameNotFound { name: arena.alloc_slice(n) })?;
 
-                    if *dest_type != value.1 {
-                        return Err(IRerror::AssignmentType { expr: value.1, destination: *dest_type });
+                    if *dest_type != value_type {
+                        return Err(IRerror::AssignmentType { expr: value_type, destination: *dest_type });
                     }
 
-                    instructions.push(Instruction::Move { source: value.0, destination: *dest_offset, size: value.1.size() });
+                    instructions.push(Instruction::Move { source: value_offset, destination: *dest_offset, size: value_type.size() });
                 }
                 else if let Expression::UnaryOperator { operator, expr } = d {
                     if *operator != ASTunaryOperator::Dereference {
@@ -942,11 +942,42 @@ fn lower_statement<'b, 'c>(
                         if !ptr.2.is_ptr() { 
                             return Err(IRerror::UnaryOperatorType { operator: ASTunaryOperator::Dereference, found: ptr.2 });
                         }
-                        instructions.push(Instruction::Store { size: value.1.size(), source: value.0, address: ptr.1 });
+                        instructions.push(Instruction::Store { size: value_type.size(), source: value_offset, address: ptr.1 });
                     }
                     else { 
                         return Err(IRerror::LeftsideDerefNotVar);
                     }
+                }
+                else if let Expression::Field { expr, field } = d {
+                    let var_name = if let Expression::Name(var_name) = expr {
+                        var_name
+                    } 
+                    else { panic!(); };
+                    let var_type = variables.iter().find(|x| x.0 == *var_name).unwrap();
+                        
+                    let name = if let RegisterType::Ptr(VariableType::Struct(name)) = var_type.2 {
+                        name
+                    }
+                    else { panic!(); }; 
+                    let st = structs.iter().find(|x| x.name == name).unwrap();
+
+                    let mut offset = 0u32;
+                    for f in st.fields {
+                        let reg_type = type_to_register(&f.0, arena)?;
+                        offset = offset.next_multiple_of(reg_type.size().to_offset());
+                        if f.1 == *field {
+                            if reg_type != value_type {
+                                panic!();
+                            }
+                            stack_push(stack_size, Size::S64);
+                            instructions.push(Instruction::Immediate { destination: *stack_size, value: offset as u64, size: Size::S64 });
+                            instructions.push(Instruction::BinaryOperation { size: Size::S64, operation: IRbinaryOperator::Add, destination: *stack_size, left: value_offset, right: *stack_size });
+                            instructions.push(Instruction::Store { size: value_type.size(), source: value_offset, address: *stack_size });
+                            return Ok(());
+                        }
+                        offset += reg_type.size().to_offset();
+                    }
+                    panic!();
                 }
                 else { 
                     return Err(IRerror::LeftsideInvalidExpr);
